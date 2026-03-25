@@ -1,0 +1,17 @@
+{
+  "name": "hw01-your-own-chatgpt",
+  "version": "1.0.0",
+  "description": "A simple ChatGPT-style web app with model selection, system prompt, streaming, and short-term memory.",
+  "main": "server.js",
+  "scripts": {
+    "start": "node server.js"
+  },
+  "keywords": [
+    "gemini",
+    "chat",
+    "streaming",
+    "node"
+  ],
+  "author": "",
+  "license": "MIT"
+}

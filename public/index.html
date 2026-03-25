@@ -1,0 +1,119 @@
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>My Own ChatGPT</title>
+    <link rel="preconnect" href="https://fonts.googleapis.com" />
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+    <link
+      href="https://fonts.googleapis.com/css2?family=DM+Serif+Display:ital@0;1&family=Space+Grotesk:wght@300;400;500;700&display=swap"
+      rel="stylesheet"
+    />
+    <link rel="stylesheet" href="/styles.css" />
+  </head>
+  <body>
+    <div class="app-shell">
+      <aside class="control-panel">
+        <div class="brand-block">
+          <p class="eyebrow">HW01</p>
+          <h1>My Own ChatGPT</h1>
+          <p class="subtitle">Pick a model, tune prompts, stream replies, and keep short-term memory.</p>
+        </div>
+
+        <section class="panel-card">
+          <div class="field-grid">
+            <label class="field">
+              <span>Model</span>
+              <select id="modelSelect"></select>
+            </label>
+
+            <label class="field">
+              <span>Custom Model</span>
+              <input id="customModelInput" type="text" placeholder="Example: gemini-2.5-flash" />
+            </label>
+          </div>
+
+          <label class="field">
+            <span>System Prompt</span>
+            <textarea
+              id="systemPromptInput"
+              rows="5"
+              placeholder="Define the assistant style, rules, and task here."
+            ></textarea>
+          </label>
+        </section>
+
+        <section class="panel-card">
+          <div class="field-grid compact-grid">
+            <label class="field">
+              <span>Temperature</span>
+              <input id="temperatureInput" type="number" min="0" max="2" step="0.1" />
+            </label>
+
+            <label class="field">
+              <span>Top P</span>
+              <input id="topPInput" type="number" min="0" max="1" step="0.1" />
+            </label>
+
+            <label class="field">
+              <span>Max Tokens</span>
+              <input id="maxTokensInput" type="number" min="32" max="4096" step="1" />
+            </label>
+
+            <label class="field">
+              <span>Memory Turns</span>
+              <input id="memoryTurnsInput" type="number" min="1" max="20" step="1" />
+            </label>
+          </div>
+        </section>
+
+        <section class="panel-card actions-card">
+          <button id="savePresetButton" class="secondary-button">Save Settings</button>
+          <button id="clearChatButton" class="secondary-button">Clear Chat</button>
+        </section>
+
+        <section class="panel-card status-card">
+          <p id="statusText">Loading settings...</p>
+          <p class="status-hint">The API key is read only from the server `.env` file.</p>
+        </section>
+      </aside>
+
+      <main class="chat-panel">
+        <header class="chat-header">
+          <div>
+            <p class="eyebrow">Streaming Demo</p>
+            <h2>Talk to your model directly</h2>
+          </div>
+          <div class="header-badge" id="memoryBadge">Memory 0 turns</div>
+        </header>
+
+        <section id="messageList" class="message-list"></section>
+
+        <form id="composerForm" class="composer">
+          <textarea
+            id="userInput"
+            rows="3"
+            placeholder="Type a message and press Send."
+            required
+          ></textarea>
+          <div class="composer-actions">
+            <button id="stopButton" type="button" class="secondary-button" disabled>Stop</button>
+            <button id="sendButton" type="submit" class="primary-button">Send</button>
+          </div>
+        </form>
+      </main>
+    </div>
+
+    <template id="messageTemplate">
+      <article class="message">
+        <div class="message-meta">
+          <span class="role-tag"></span>
+        </div>
+        <div class="message-body"></div>
+      </article>
+    </template>
+
+    <script src="/app.js"></script>
+  </body>
+</html>
