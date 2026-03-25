@@ -170,6 +170,7 @@ async function handleChat(req, res) {
       }
 
       buffer += decoder.decode(value, { stream: true });
+      buffer = buffer.replace(/\r\n/g, "\n");
 
       while (buffer.includes("\n\n")) {
         const boundaryIndex = buffer.indexOf("\n\n");
