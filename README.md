@@ -1,21 +1,25 @@
-# HW01 - My Own ChatGPT with Gemini
+# HW02 - My Own ChatGPT v2
 
-A simple ChatGPT-style web app for the assignment. It uses the Gemini API and supports model selection, custom system prompt, API parameters, streaming replies, and short-term memory.
+A zero-dependency ChatGPT-style web app built with Node.js built-in modules and vanilla JavaScript. It now supports persistent memory, multimodal image input, automatic model routing, function calling tools, multi-chat session management, export, editing/regeneration, and voice input.
 
 ## Features
 
-1. Choose a Gemini model
-2. Customize the system prompt
-3. Customize common API parameters
-4. Stream responses token by token
-5. Keep short-term conversation memory
-6. Protect the API key with `.env`
+1. Persistent memory stored in `memory.json`
+2. Automatic long-chat summarization into reusable memory bullets
+3. Multimodal image upload with drag-and-drop and preview
+4. Automatic vision model override for image requests
+5. Auto Route model selection based on prompt complexity
+6. Function calling tools for weather, calculator, and web search
+7. Export chat as JSON or Markdown
+8. Edit user messages and regenerate downstream replies
+9. Multi-session local chat management with `chat_<timestamp>` keys
+10. Voice input with Web Speech API fallback handling
 
 ## Tech Stack
 
-- Frontend: HTML / CSS / Vanilla JavaScript
-- Backend: Node.js built-in `http` server
-- API: Gemini API REST `streamGenerateContent`
+- Frontend: HTML / CSS / Vanilla JavaScript modules
+- Backend: Node.js built-in `http`, `fs`, `path`, `url`
+- API: Gemini REST API (`generateContent` / `streamGenerateContent`)
 
 No extra npm packages are required.
 
@@ -40,54 +44,56 @@ PORT=3000
 npm start
 ```
 
-4. Open the browser
+4. Open:
 
 ```text
 http://localhost:3000
 ```
 
-## Security Notes
-
-- Do not upload `.env` to GitHub
-- Keep the API key on the server side only
-- `.gitignore` already excludes `.env`
-
 ## Project Structure
 
 ```text
 .
+|-- lib/
+|   |-- gemini.js
+|   |-- memory.js
+|   |-- router.js
+|   |-- sse.js
+|   `-- tools.js
 |-- public/
+|   |-- modules/
+|   |   |-- api.js
+|   |   |-- memory-ui.js
+|   |   |-- state.js
+|   |   |-- tools-ui.js
+|   |   `-- ui.js
 |   |-- app.js
 |   |-- index.html
 |   `-- styles.css
+|-- docs/
+|   `-- system-architecture.md
+|-- memory.json
 |-- .env.example
-|-- .gitignore
 |-- package.json
 |-- README.md
 `-- server.js
 ```
 
-## Demo Suggestion
+## Health Endpoint
 
-For the 3-minute demo:
+`GET /api/health` returns:
 
-1. Open the page and show model switching
-2. Change the system prompt
-3. Change temperature, top_p, and max tokens
-4. Send a prompt and show streaming
-5. Ask a follow-up question to show memory
-6. Show the GitHub repo and confirm `.env` is not uploaded
+- Gemini availability and API key status
+- Available model list
+- Persistent memory entry count
+- Registered tool names
 
-## GitHub
+## Notes
 
-```bash
-git init
-git add .
-git commit -m "feat: build my own gemini chat app hw01"
-```
+- The backend remains zero-dependency.
+- `server.js` only starts the server when run directly; `node -e "require('./server.js')"` now succeeds without hanging.
+- Pro / blocked Gemini models are filtered out to avoid quota failures.
 
-## Gemini Docs Used
+## Docs
 
-- Text generation: https://ai.google.dev/gemini-api/docs/text-generation
-- Generate content REST API: https://ai.google.dev/api/generate-content
-- Models REST API: https://ai.google.dev/api/models
+- System intro and architecture diagram: [docs/system-architecture.md](docs/system-architecture.md)
