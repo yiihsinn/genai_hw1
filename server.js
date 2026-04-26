@@ -16,6 +16,11 @@ const SUMMARY_BATCH_SIZE = 10;
 const MAX_REQUEST_BODY_SIZE = 16_000_000;
 const INLINE_DATA_LIMIT = 13_000_000;
 const VISION_MODEL = "gemini-3-flash-preview";
+const DEFAULT_CHAT_MODEL = "gemini-2.5-flash";
+const BLOCKED_MODELS = new Set([
+  "gemini-2.5-pro",
+  "gemini-3.1-pro-preview"
+]);
 
 const MODEL_OPTIONS = [
   "gemini-2.5-flash",
@@ -135,6 +140,7 @@ async function handleChat(req, res) {
 
   const {
     model,
+    autoRoute,
     systemPrompt,
     temperature,
     topP,
@@ -158,10 +164,29 @@ async function handleChat(req, res) {
     });
   }
 
-  const selectedModel = inlineDataParts.length > 0 ? VISION_MODEL : model;
+  const requestedModel = sanitizeRequestedModel(model);
+  const latestUserMessage = getLatestUserMessage(workingMessages);
+  const availableModels = Array.from(new Set([
+    DEFAULT_CHAT_MODEL,
+    VISION_MODEL,
+    "gemini-3.1-flash-lite-preview",
+    requestedModel
+  ]));
+
+  let selectedModel = inlineDataParts.length > 0 ? VISION_MODEL : requestedModel;
+  let routingPayload = null;
+
+  if (autoRoute) {
+    routingPayload = selectModel(latestUserMessage, availableModels, {
+      preferredModel: requestedModel,
+      hasInlineImage: inlineDataParts.length > 0
+    });
+    selectedModel = routingPayload.model;
+  }
+
   const modelOverridePayload = inlineDataParts.length > 0
     ? {
-      model: selectedModel,
+      model: VISION_MODEL,
       reason: "image detected: cost optimization"
     }
     : null;
@@ -236,6 +261,10 @@ async function handleChat(req, res) {
 
   if (modelOverridePayload) {
     writeSse(res, "model_override", modelOverridePayload);
+  }
+
+  if (routingPayload) {
+    writeSse(res, "routing", routingPayload);
   }
 
   if (pendingSummary?.summary) {
@@ -458,6 +487,75 @@ function getInlineDataParts(messages) {
   });
 }
 
+function getLatestUserMessage(messages) {
+  for (let index = messages.length - 1; index >= 0; index -= 1) {
+    const message = messages[index];
+    if (message?.role === "user") {
+      return message.content || "";
+    }
+  }
+
+  return "";
+}
+
+function selectModel(userMessage, availableModels, options = {}) {
+  const hasInlineImage = Boolean(options.hasInlineImage);
+  const preferredModel = sanitizeRequestedModel(options.preferredModel || DEFAULT_CHAT_MODEL);
+  const text = typeof userMessage === "string" ? userMessage : "";
+
+  if (hasInlineImage && availableModels.includes(VISION_MODEL)) {
+    return {
+      model: VISION_MODEL,
+      reason: "image detected"
+    };
+  }
+
+  if (text.includes("```") && availableModels.includes(DEFAULT_CHAT_MODEL)) {
+    return {
+      model: DEFAULT_CHAT_MODEL,
+      reason: "code block detected"
+    };
+  }
+
+  if (text.length > 1000 && availableModels.includes(DEFAULT_CHAT_MODEL)) {
+    return {
+      model: DEFAULT_CHAT_MODEL,
+      reason: "long content"
+    };
+  }
+
+  if (/(translate|翻譯|summarize|summary|摘要)/i.test(text) && availableModels.includes(VISION_MODEL)) {
+    return {
+      model: VISION_MODEL,
+      reason: "translation or summarization task"
+    };
+  }
+
+  if (text.length > 0 && text.length < 100 && !/[?？]/.test(text) && availableModels.includes("gemini-3.1-flash-lite-preview")) {
+    return {
+      model: "gemini-3.1-flash-lite-preview",
+      reason: "short casual prompt"
+    };
+  }
+
+  return {
+    model: preferredModel,
+    reason: "using selected model"
+  };
+}
+
+function sanitizeRequestedModel(model) {
+  if (typeof model !== "string" || !model.trim() || isBlockedModel(model.trim())) {
+    return DEFAULT_CHAT_MODEL;
+  }
+
+  return model.trim();
+}
+
+function isBlockedModel(model) {
+  return model.startsWith("gemini-1.5-") || BLOCKED_MODELS.has(model);
+}
+
 function normalizeSummaryForPrompt(summary) {
   return summary
     .split(/\r?\n/)
@@ -589,9 +687,7 @@ async function getGeminiModels() {
       .map((modelInfo) => modelInfo.baseModelId || stripModelPrefix(modelInfo.name))
       .filter(Boolean)
       .filter((name) => name.startsWith("gemini-"))
-      .filter((name) => !name.startsWith("gemini-1.5-"))
-      .filter((name) => name !== "gemini-2.5-pro")
-      .filter((name) => name !== "gemini-3.1-pro-preview");
+      .filter((name) => !isBlockedModel(name));
 
     return Array.from(new Set([...available, ...MODEL_OPTIONS])).sort();
   } catch {

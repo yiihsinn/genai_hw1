@@ -23,16 +23,21 @@
 
         <section class="panel-card">
           <div class="field-grid">
-            <label class="field">
+            <label id="modelField" class="field">
               <span>Model</span>
               <select id="modelSelect"></select>
             </label>
 
-            <label class="field">
+            <label id="customModelField" class="field">
               <span>Custom Model</span>
               <input id="customModelInput" type="text" placeholder="Example: gemini-2.5-flash" />
             </label>
           </div>
+
+          <label class="toggle-field">
+            <input id="autoRouteToggle" type="checkbox" />
+            <span>🤖 Auto Route</span>
+          </label>
 
           <label class="field">
             <span>System Prompt</span>

@@ -5,6 +5,7 @@ const IMAGE_BASE64_LIMIT = 13_000_000;
 const defaultState = {
   model: "gemini-2.5-flash",
   customModel: "",
+  autoRoute: false,
   systemPrompt: "You are a helpful AI assistant. Answer clearly and concisely.",
   temperature: 0.7,
   topP: 1,
@@ -17,8 +18,11 @@ const state = loadState();
 
 const chatPanel = document.querySelector(".chat-panel");
 const runtimeNotice = document.querySelector("#runtimeNotice");
+const modelField = document.querySelector("#modelField");
+const customModelField = document.querySelector("#customModelField");
 const modelSelect = document.querySelector("#modelSelect");
 const customModelInput = document.querySelector("#customModelInput");
+const autoRouteToggle = document.querySelector("#autoRouteToggle");
 const systemPromptInput = document.querySelector("#systemPromptInput");
 const temperatureInput = document.querySelector("#temperatureInput");
 const topPInput = document.querySelector("#topPInput");
@@ -72,6 +76,11 @@ function bindEvents() {
   addMemoryButton.addEventListener("click", handleAddMemory);
   attachImageButton.addEventListener("click", () => imageInput.click());
   imageInput.addEventListener("change", handleImageInputChange);
+  autoRouteToggle.addEventListener("change", () => {
+    state.autoRoute = autoRouteToggle.checked;
+    updateModelControlsVisibility();
+    persistState();
+  });
 
   memoryInput.addEventListener("keydown", (event) => {
     if (event.key === "Enter") {
@@ -216,12 +225,20 @@ function populateModelOptions(models) {
 function syncControlsFromState() {
   modelSelect.value = state.model;
   customModelInput.value = state.customModel;
+  autoRouteToggle.checked = Boolean(state.autoRoute);
   systemPromptInput.value = state.systemPrompt;
   temperatureInput.value = String(state.temperature);
   topPInput.value = String(state.topP);
   maxTokensInput.value = String(state.maxOutputTokens);
   memoryTurnsInput.value = String(state.memoryTurns);
+  updateModelControlsVisibility();
   updateMemoryBadge();
+}
+
+function updateModelControlsVisibility() {
+  const hidden = Boolean(state.autoRoute);
+  modelField.hidden = hidden;
+  customModelField.hidden = hidden;
 }
 
 function setComposerEnabled(enabled) {
@@ -494,6 +511,7 @@ async function handleSubmit(event) {
         temperature: state.temperature,
         topP: state.topP,
         maxOutputTokens: state.maxOutputTokens,
+        autoRoute: state.autoRoute,
         messages: getRequestMessages(state.messages, state.memoryTurns)
       }),
       signal: abortController.signal
@@ -589,6 +607,11 @@ async function consumeEventStream(response, assistantMessage) {
         continue;
       }
 
+      if (parsedEvent.event === "routing") {
+        handleRoutingEvent(parsedEvent.data);
+        continue;
+      }
+
       if (parsedEvent.event === "token" && parsedEvent.data?.delta) {
         assistantMessage.content += parsedEvent.data.delta;
         persistState();
@@ -628,6 +651,14 @@ function handleModelOverrideEvent(data) {
   }
 
   showRuntimeNotice(`Using ${data.model} because ${data.reason || "an image was attached"}.`);
+}
+
+function handleRoutingEvent(data) {
+  if (!data?.model) {
+    return;
+  }
+
+  showRuntimeNotice(`→ Routed to ${data.model} (${data.reason || "automatic routing"})`);
 }
 
 function parseSse(rawEvent) {
@@ -800,6 +831,7 @@ function buildPersistentMemoryBlock(entries) {
 function syncStateFromControls() {
   state.model = modelSelect.value;
   state.customModel = customModelInput.value.trim();
+  state.autoRoute = autoRouteToggle.checked;
   state.systemPrompt = systemPromptInput.value;
   state.temperature = Number(temperatureInput.value || defaultState.temperature);
   state.topP = Number(topPInput.value || defaultState.topP);

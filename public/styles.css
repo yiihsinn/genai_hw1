@@ -133,6 +133,21 @@ h3 {
   gap: 8px;
 }
 
+.toggle-field {
+  display: inline-flex;
+  align-items: center;
+  gap: 10px;
+  margin-top: 16px;
+  font-weight: 700;
+  color: var(--muted);
+}
+
+.toggle-field input {
+  width: 18px;
+  height: 18px;
+  margin: 0;
+}
+
 .field span {
   font-size: 13px;
   font-weight: 700;
