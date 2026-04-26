@@ -17,16 +17,88 @@ const MAX_REQUEST_BODY_SIZE = 16_000_000;
 const INLINE_DATA_LIMIT = 13_000_000;
 const VISION_MODEL = "gemini-3-flash-preview";
 const DEFAULT_CHAT_MODEL = "gemini-2.5-flash";
+const LITE_MODEL = "gemini-3.1-flash-lite-preview";
 const BLOCKED_MODELS = new Set([
   "gemini-2.5-pro",
   "gemini-3.1-pro-preview"
 ]);
 
 const MODEL_OPTIONS = [
-  "gemini-2.5-flash",
-  "gemini-3-flash-preview",
-  "gemini-3.1-flash-lite-preview"
+  DEFAULT_CHAT_MODEL,
+  VISION_MODEL,
+  LITE_MODEL
 ];
+
+const TOOLS = [
+  {
+    functionDeclarations: [
+      {
+        name: "get_current_weather",
+        description: "Get the current weather for a location",
+        parameters: {
+          type: "OBJECT",
+          properties: {
+            location: { type: "STRING", description: "City name, e.g. Taipei" }
+          },
+          required: ["location"]
+        }
+      },
+      {
+        name: "calculate",
+        description: "Evaluate a mathematical expression",
+        parameters: {
+          type: "OBJECT",
+          properties: {
+            expression: { type: "STRING", description: "Math expression, e.g. 2+2*3" }
+          },
+          required: ["expression"]
+        }
+      },
+      {
+        name: "web_search",
+        description: "Search the web for current information",
+        parameters: {
+          type: "OBJECT",
+          properties: {
+            query: { type: "STRING", description: "Search query" }
+          },
+          required: ["query"]
+        }
+      }
+    ]
+  }
+];
+
+const WEATHER_CODES = {
+  0: "clear sky",
+  1: "mainly clear",
+  2: "partly cloudy",
+  3: "overcast",
+  45: "fog",
+  48: "depositing rime fog",
+  51: "light drizzle",
+  53: "moderate drizzle",
+  55: "dense drizzle",
+  56: "light freezing drizzle",
+  57: "dense freezing drizzle",
+  61: "slight rain",
+  63: "moderate rain",
+  65: "heavy rain",
+  66: "light freezing rain",
+  67: "heavy freezing rain",
+  71: "slight snow fall",
+  73: "moderate snow fall",
+  75: "heavy snow fall",
+  77: "snow grains",
+  80: "slight rain showers",
+  81: "moderate rain showers",
+  82: "violent rain showers",
+  85: "slight snow showers",
+  86: "heavy snow showers",
+  95: "thunderstorm",
+  96: "thunderstorm with slight hail",
+  99: "thunderstorm with heavy hail"
+};
 
 const MIME_TYPES = {
   ".html": "text/html; charset=utf-8",
@@ -141,6 +213,7 @@ async function handleChat(req, res) {
   const {
     model,
     autoRoute,
+    tools,
     systemPrompt,
     temperature,
     topP,
@@ -169,7 +242,7 @@ async function handleChat(req, res) {
   const availableModels = Array.from(new Set([
     DEFAULT_CHAT_MODEL,
     VISION_MODEL,
-    "gemini-3.1-flash-lite-preview",
+    LITE_MODEL,
     requestedModel
   ]));
 
@@ -202,7 +275,8 @@ async function handleChat(req, res) {
       workingMessages = [
         {
           role: "user",
-          content: `[Memory] Key context from previous conversations:\n${normalizeSummaryForPrompt(pendingSummary.summary)}`
+          content: `[Memory] Key context from previous conversations:\n${normalizeSummaryForPrompt(pendingSummary.summary)}`,
+          parts: [{ text: `[Memory] Key context from previous conversations:\n${normalizeSummaryForPrompt(pendingSummary.summary)}` }]
         },
         ...workingMessages.slice(pendingSummary.sourceMessageCount)
       ];
@@ -213,20 +287,27 @@ async function handleChat(req, res) {
     .map(convertMessageToGeminiContent)
     .filter(Boolean);
 
-  const payload = {
-    contents,
-    generationConfig: {
-      temperature: clampNumber(temperature, 0, 2, 1),
-      topP: clampNumber(topP, 0, 1, 1),
-      maxOutputTokens: clampInteger(maxOutputTokens, 32, 8192, 512)
-    }
+  const settings = {
+    systemPrompt,
+    temperature,
+    topP,
+    maxOutputTokens
   };
 
-  if (typeof systemPrompt === "string" && systemPrompt.trim()) {
-    payload.systemInstruction = {
-      parts: [{ text: systemPrompt.trim() }]
-    };
+  if (tools) {
+    return handleChatWithTools({
+      res,
+      model: selectedModel,
+      contents,
+      settings,
+      controller,
+      modelOverridePayload,
+      routingPayload,
+      pendingSummary
+    });
   }
+
+  const payload = buildGeminiPayload(contents, settings);
 
   let upstream;
 
@@ -253,11 +334,142 @@ async function handleChat(req, res) {
     return sendJson(res, upstream.status || 500, { error: message });
   }
 
+  startSseResponse(res);
+  emitPreflightEvents(res, {
+    modelOverridePayload,
+    routingPayload,
+    pendingSummary
+  });
+
+  try {
+    await streamGeminiResponse(upstream, res);
+    writeSse(res, "done", {});
+  } catch (error) {
+    if (error.name !== "AbortError") {
+      writeSse(res, "error", {
+        message: "Streaming interrupted while reading the model response."
+      });
+    }
+  } finally {
+    res.end();
+  }
+}
+
+async function handleChatWithTools(context) {
+  const {
+    res,
+    model,
+    contents,
+    settings,
+    controller,
+    modelOverridePayload,
+    routingPayload,
+    pendingSummary
+  } = context;
+
+  let history = contents.map(cloneJsonValue);
+  let responsePayload;
+
+  try {
+    responsePayload = await generateGeminiJson(
+      model,
+      buildGeminiPayload(history, settings, { includeTools: true }),
+      controller.signal
+    );
+  } catch (error) {
+    const statusCode = error.statusCode || 502;
+    const message = error.name === "AbortError"
+      ? "Client disconnected."
+      : error.message || "Gemini API request failed.";
+    return sendJson(res, statusCode, { error: message });
+  }
+
+  startSseResponse(res);
+  emitPreflightEvents(res, {
+    modelOverridePayload,
+    routingPayload,
+    pendingSummary
+  });
+
+  try {
+    let rounds = 0;
+    let currentResponse = responsePayload;
+
+    while (rounds < 3) {
+      const functionCall = extractFunctionCall(currentResponse);
+      if (!functionCall) {
+        emitResponseText(currentResponse, res);
+        writeSse(res, "done", {});
+        return res.end();
+      }
+
+      writeSse(res, "tool_call", {
+        name: functionCall.name,
+        args: functionCall.args || {}
+      });
+
+      let toolResult;
+
+      try {
+        toolResult = await executeTool(functionCall.name, functionCall.args || {}, controller.signal);
+      } catch (error) {
+        toolResult = `Tool error: ${error.message}`;
+      }
+
+      writeSse(res, "tool_result", {
+        name: functionCall.name,
+        result: toolResult
+      });
+
+      history.push(cloneGeminiContent(currentResponse?.candidates?.[0]?.content) || buildModelFunctionCallContent(functionCall));
+      history.push(buildFunctionResponseContent(functionCall, toolResult));
+
+      rounds += 1;
+
+      if (rounds >= 3) {
+        break;
+      }
+
+      currentResponse = await generateGeminiJson(
+        model,
+        buildGeminiPayload(history, settings, { includeTools: true }),
+        controller.signal
+      );
+    }
+
+    const finalResponse = await generateGeminiJson(
+      model,
+      buildGeminiPayload(history, settings),
+      controller.signal
+    );
+
+    emitResponseText(finalResponse, res);
+    writeSse(res, "done", {});
+  } catch (error) {
+    if (error.name !== "AbortError") {
+      writeSse(res, "error", {
+        message: error.message || "Tool-assisted request failed."
+      });
+    }
+  } finally {
+    res.end();
+  }
+}
+
+function startSseResponse(res) {
   res.writeHead(200, {
     "Content-Type": "text/event-stream; charset=utf-8",
     "Cache-Control": "no-cache, no-transform",
     Connection: "keep-alive"
   });
+}
+
+function emitPreflightEvents(res, options) {
+  const {
+    modelOverridePayload,
+    routingPayload,
+    pendingSummary
+  } = options;
 
   if (modelOverridePayload) {
     writeSse(res, "model_override", modelOverridePayload);
@@ -287,43 +499,49 @@ async function handleChat(req, res) {
       });
     }
   }
+}
 
-  const decoder = new TextDecoder();
-  const reader = upstream.body.getReader();
-  let buffer = "";
+function emitResponseText(payload, res) {
+  const text = extractGeminiText(payload) || "The model returned no content.";
+  streamTextChunks(res, text);
 
-  try {
-    while (true) {
-      const { done, value } = await reader.read();
-      if (done) {
-        break;
-      }
+  writeSse(res, "finish", {
+    reason: payload?.candidates?.[0]?.finishReason || "STOP",
+    message: payload?.candidates?.[0]?.finishMessage || ""
+  });
+}
 
-      buffer += decoder.decode(value, { stream: true });
-      buffer = buffer.replace(/\r\n/g, "\n");
+function streamTextChunks(res, text) {
+  const chunkSize = 80;
 
-      while (buffer.includes("\n\n")) {
-        const boundaryIndex = buffer.indexOf("\n\n");
-        const rawEvent = buffer.slice(0, boundaryIndex);
-        buffer = buffer.slice(boundaryIndex + 2);
-        forwardGeminiEvent(rawEvent, res);
-      }
-    }
-
-    if (buffer.trim()) {
-      forwardGeminiEvent(buffer, res);
-    }
-
-    writeSse(res, "done", {});
-  } catch (error) {
-    if (error.name !== "AbortError") {
-      writeSse(res, "error", {
-        message: "Streaming interrupted while reading the model response."
-      });
-    }
-  } finally {
-    res.end();
+  for (let index = 0; index < text.length; index += chunkSize) {
+    writeSse(res, "token", {
+      delta: text.slice(index, index + chunkSize)
+    });
   }
+}
+
+function buildGeminiPayload(contents, settings, options = {}) {
+  const payload = {
+    contents,
+    generationConfig: {
+      temperature: clampNumber(settings.temperature, 0, 2, 1),
+      topP: clampNumber(settings.topP, 0, 1, 1),
+      maxOutputTokens: clampInteger(settings.maxOutputTokens, 32, 8192, 512)
+    }
+  };
+
+  if (typeof settings.systemPrompt === "string" && settings.systemPrompt.trim()) {
+    payload.systemInstruction = {
+      parts: [{ text: settings.systemPrompt.trim() }]
+    };
+  }
+
+  if (options.includeTools) {
+    payload.tools = TOOLS;
+  }
+
+  return payload;
 }
 
 async function summarizeOldMessages(model, messages, signal) {
@@ -476,6 +694,18 @@ function cloneGeminiPart(part) {
     };
   }
 
+  if (part?.functionCall || part?.function_call) {
+    return {
+      functionCall: cloneJsonValue(part.functionCall || part.function_call)
+    };
+  }
+
+  if (part?.functionResponse) {
+    return {
+      functionResponse: cloneJsonValue(part.functionResponse)
+    };
+  }
+
   return null;
 }
 
@@ -524,16 +754,16 @@ function selectModel(userMessage, availableModels, options = {}) {
     };
   }
 
-  if (/(translate|翻譯|summarize|summary|摘要)/i.test(text) && availableModels.includes(VISION_MODEL)) {
+  if (/(translate|\u7ffb\u8b6f|summarize|summary|\u6458\u8981)/i.test(text) && availableModels.includes(VISION_MODEL)) {
     return {
       model: VISION_MODEL,
       reason: "translation or summarization task"
     };
   }
 
-  if (text.length > 0 && text.length < 100 && !/[?？]/.test(text) && availableModels.includes("gemini-3.1-flash-lite-preview")) {
+  if (text.length > 0 && text.length < 100 && !/[?\uFF1F]/.test(text) && availableModels.includes(LITE_MODEL)) {
     return {
-      model: "gemini-3.1-flash-lite-preview",
+      model: LITE_MODEL,
       reason: "short casual prompt"
     };
   }
@@ -575,35 +805,272 @@ function normalizeSummaryForPrompt(summary) {
     .join("\n");
 }
 
-async function generateGeminiText(model, payload, signal) {
-  const response = await fetch(buildGeminiUrl(model, false), {
-    method: "POST",
+async function executeTool(name, args, signal) {
+  if (name === "calculate") {
+    return executeCalculation(args?.expression);
+  }
+
+  if (name === "get_current_weather") {
+    return getCurrentWeather(args?.location, signal);
+  }
+
+  if (name === "web_search") {
+    return webSearch(args?.query, signal);
+  }
+
+  throw new Error(`Unsupported tool: ${name}`);
+}
+
+function executeCalculation(expression) {
+  if (typeof expression !== "string" || !expression.trim()) {
+    throw new Error("A math expression is required.");
+  }
+
+  const source = expression.trim();
+  if (!/^[0-9+\-*/().,%\s^A-Za-z]+$/.test(source)) {
+    throw new Error("Expression contains unsupported characters.");
+  }
+
+  const allowedMath = source
+    .replace(/Math\.(abs|ceil|floor|round|min|max|pow|sqrt|sin|cos|tan|log|exp|PI|E)/g, "")
+    .replace(/\d+(\.\d+)?/g, "")
+    .replace(/[+\-*/().,%\s^]/g, "");
+
+  if (allowedMath) {
+    throw new Error("Only Math.* helpers and basic operators are allowed.");
+  }
+
+  const jsExpression = source.replace(/\^/g, "**");
+  const result = Function(`"use strict"; return (${jsExpression})`)();
+
+  if (typeof result !== "number" || !Number.isFinite(result)) {
+    throw new Error("Expression did not produce a finite number.");
+  }
+
+  return String(result);
+}
+
+async function getCurrentWeather(location, signal) {
+  if (typeof location !== "string" || !location.trim()) {
+    throw new Error("A location is required.");
+  }
+
+  const geocodeUrl = `https://geocoding-api.open-meteo.com/v1/search?name=${encodeURIComponent(location.trim())}&count=1`;
+  const geocodePayload = await fetchJson(geocodeUrl, signal);
+  const place = Array.isArray(geocodePayload?.results) ? geocodePayload.results[0] : null;
+
+  if (!place) {
+    return `No weather data found for ${location.trim()}.`;
+  }
+
+  const weatherUrl = `https://api.open-meteo.com/v1/forecast?latitude=${encodeURIComponent(place.latitude)}&longitude=${encodeURIComponent(place.longitude)}&current_weather=true`;
+  const weatherPayload = await fetchJson(weatherUrl, signal);
+  const current = weatherPayload?.current_weather;
+
+  if (!current) {
+    return `No weather data found for ${location.trim()}.`;
+  }
+
+  const description = WEATHER_CODES[current.weathercode] || "unknown conditions";
+  return `Current weather in ${place.name}: ${current.temperature}°C, wind ${current.windspeed} km/h, code ${current.weathercode} (${description})`;
+}
+
+async function webSearch(query, signal) {
+  if (typeof query !== "string" || !query.trim()) {
+    throw new Error("A search query is required.");
+  }
+
+  const url = `https://api.duckduckgo.com/?q=${encodeURIComponent(query.trim())}&format=json&no_html=1&skip_disambig=1`;
+  const payload = await fetchJson(url, signal);
+  const resultText = extractDuckDuckGoText(payload);
+
+  return resultText || "No results found.";
+}
+
+function extractDuckDuckGoText(payload) {
+  if (typeof payload?.AbstractText === "string" && payload.AbstractText.trim()) {
+    return payload.AbstractText.trim();
+  }
+
+  if (typeof payload?.Answer === "string" && payload.Answer.trim()) {
+    return payload.Answer.trim();
+  }
+
+  const topics = Array.isArray(payload?.RelatedTopics) ? payload.RelatedTopics : [];
+  for (const topic of topics) {
+    if (typeof topic?.Text === "string" && topic.Text.trim()) {
+      return topic.Text.trim();
+    }
+
+    if (Array.isArray(topic?.Topics)) {
+      for (const nestedTopic of topic.Topics) {
+        if (typeof nestedTopic?.Text === "string" && nestedTopic.Text.trim()) {
+          return nestedTopic.Text.trim();
+        }
+      }
+    }
+  }
+
+  return "";
+}
+
+async function fetchJson(url, signal) {
+  const response = await fetch(url, {
     headers: {
       "Content-Type": "application/json"
     },
-    body: JSON.stringify(payload),
     signal
   });
+
+  if (!response.ok) {
+    throw new Error(`External request failed with status ${response.status}.`);
+  }
+
+  return response.json();
+}
+
+function extractFunctionCall(payload) {
+  const parts = payload?.candidates?.[0]?.content?.parts;
+  if (!Array.isArray(parts)) {
+    return null;
+  }
+
+  for (const part of parts) {
+    const functionCall = part?.functionCall || part?.function_call;
+    if (functionCall?.name) {
+      return {
+        id: functionCall.id,
+        name: functionCall.name,
+        args: cloneJsonValue(functionCall.args || {})
+      };
+    }
+  }
+
+  return null;
+}
+
+function buildFunctionResponseContent(functionCall, result) {
+  const functionResponse = {
+    name: functionCall.name,
+    response: {
+      result
+    }
+  };
+
+  if (functionCall.id) {
+    functionResponse.id = functionCall.id;
+  }
+
+  return {
+    role: "user",
+    parts: [
+      {
+        functionResponse
+      }
+    ]
+  };
+}
+
+function buildModelFunctionCallContent(functionCall) {
+  return {
+    role: "model",
+    parts: [
+      {
+        functionCall: cloneJsonValue(functionCall)
+      }
+    ]
+  };
+}
+
+function cloneGeminiContent(content) {
+  if (!content || typeof content !== "object") {
+    return null;
+  }
+
+  return cloneJsonValue(content);
+}
+
+function cloneJsonValue(value) {
+  return value == null ? value : JSON.parse(JSON.stringify(value));
+}
+
+async function generateGeminiText(model, payload, signal) {
+  const data = await generateGeminiJson(model, payload, signal);
+  return extractGeminiText(data);
+}
+
+async function generateGeminiJson(model, payload, signal) {
+  let response;
+
+  try {
+    response = await fetch(buildGeminiUrl(model, false), {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json"
+      },
+      body: JSON.stringify(payload),
+      signal
+    });
+  } catch (error) {
+    if (error.name === "AbortError") {
+      throw error;
+    }
+
+    const networkError = new Error("Failed to connect to Gemini API.");
+    networkError.statusCode = 502;
+    throw networkError;
+  }
 
   if (!response.ok) {
     const errorText = await response.text();
     const parsed = tryParseJson(errorText);
     const message = parsed?.error?.message || errorText || "Gemini API request failed.";
-    throw new Error(message);
+    const apiError = new Error(message);
+    apiError.statusCode = response.status || 500;
+    throw apiError;
   }
 
   const data = await response.json();
   if (data?.error?.message) {
-    throw new Error(data.error.message);
+    const apiError = new Error(data.error.message);
+    apiError.statusCode = 500;
+    throw apiError;
   }
 
-  return extractGeminiText(data);
+  return data;
 }
 
 function buildGeminiUrl(model, stream) {
   const action = stream ? "streamGenerateContent?alt=sse" : "generateContent";
   const separator = stream ? "&" : "?";
   return `${GEMINI_API_BASE}/models/${encodeURIComponent(model)}:${action}${separator}key=${encodeURIComponent(GEMINI_API_KEY)}`;
+}
+
+async function streamGeminiResponse(upstream, res) {
+  const decoder = new TextDecoder();
+  const reader = upstream.body.getReader();
+  let buffer = "";
+
+  while (true) {
+    const { done, value } = await reader.read();
+    if (done) {
+      break;
+    }
+
+    buffer += decoder.decode(value, { stream: true });
+    buffer = buffer.replace(/\r\n/g, "\n");
+
+    while (buffer.includes("\n\n")) {
+      const boundaryIndex = buffer.indexOf("\n\n");
+      const rawEvent = buffer.slice(0, boundaryIndex);
+      buffer = buffer.slice(boundaryIndex + 2);
+      forwardGeminiEvent(rawEvent, res);
+    }
+  }
+
+  if (buffer.trim()) {
+    forwardGeminiEvent(buffer, res);
+  }
 }
 
 function forwardGeminiEvent(rawEvent, res) {

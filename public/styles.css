@@ -380,6 +380,10 @@ button:disabled {
   align-self: flex-start;
 }
 
+.message.tool {
+  align-self: flex-start;
+}
+
 .message-meta {
   font-size: 12px;
   font-weight: 700;
@@ -413,6 +417,11 @@ button:disabled {
 
 .message.user .message-body {
   background: var(--user-bubble);
+}
+
+.message.tool .message-body {
+  background: #fff3c6;
+  border-color: rgba(173, 134, 33, 0.28);
 }
 
 .message.streaming .message-body::after {

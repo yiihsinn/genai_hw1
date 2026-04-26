@@ -6,6 +6,7 @@ const defaultState = {
   model: "gemini-2.5-flash",
   customModel: "",
   autoRoute: false,
+  toolsEnabled: false,
   systemPrompt: "You are a helpful AI assistant. Answer clearly and concisely.",
   temperature: 0.7,
   topP: 1,
@@ -23,6 +24,7 @@ const customModelField = document.querySelector("#customModelField");
 const modelSelect = document.querySelector("#modelSelect");
 const customModelInput = document.querySelector("#customModelInput");
 const autoRouteToggle = document.querySelector("#autoRouteToggle");
+const toolsToggle = document.querySelector("#toolsToggle");
 const systemPromptInput = document.querySelector("#systemPromptInput");
 const temperatureInput = document.querySelector("#temperatureInput");
 const topPInput = document.querySelector("#topPInput");
@@ -52,6 +54,7 @@ let lastFinishReason = "";
 let memoryEntries = [];
 let pendingImage = null;
 let dragDepth = 0;
+let streamingAssistantMessage = null;
 
 boot();
 
@@ -79,6 +82,10 @@ function bindEvents() {
   autoRouteToggle.addEventListener("change", () => {
     state.autoRoute = autoRouteToggle.checked;
     updateModelControlsVisibility();
+    persistState();
+  });
+  toolsToggle.addEventListener("change", () => {
+    state.toolsEnabled = toolsToggle.checked;
     persistState();
   });
 
@@ -226,6 +233,7 @@ function syncControlsFromState() {
   modelSelect.value = state.model;
   customModelInput.value = state.customModel;
   autoRouteToggle.checked = Boolean(state.autoRoute);
+  toolsToggle.checked = Boolean(state.toolsEnabled);
   systemPromptInput.value = state.systemPrompt;
   temperatureInput.value = String(state.temperature);
   topPInput.value = String(state.topP);
@@ -487,6 +495,7 @@ async function handleSubmit(event) {
   const assistantMessage = { role: "assistant", content: "" };
 
   state.messages.push(userMessage, assistantMessage);
+  streamingAssistantMessage = assistantMessage;
   clearPendingImage();
   persistState();
   renderMessages({ streamingIndex: state.messages.length - 1 });
@@ -512,6 +521,7 @@ async function handleSubmit(event) {
         topP: state.topP,
         maxOutputTokens: state.maxOutputTokens,
         autoRoute: state.autoRoute,
+        tools: state.toolsEnabled,
         messages: getRequestMessages(state.messages, state.memoryTurns)
       }),
       signal: abortController.signal
@@ -544,6 +554,7 @@ async function handleSubmit(event) {
     }
   } finally {
     abortController = null;
+    streamingAssistantMessage = null;
     setStreamingUi(false);
     persistState();
     renderMessages();
@@ -612,6 +623,16 @@ async function consumeEventStream(response, assistantMessage) {
         continue;
       }
 
+      if (parsedEvent.event === "tool_call") {
+        handleToolCallEvent(parsedEvent.data);
+        continue;
+      }
+
+      if (parsedEvent.event === "tool_result") {
+        handleToolResultEvent(parsedEvent.data);
+        continue;
+      }
+
       if (parsedEvent.event === "token" && parsedEvent.data?.delta) {
         assistantMessage.content += parsedEvent.data.delta;
         persistState();
@@ -634,15 +655,35 @@ async function consumeEventStream(response, assistantMessage) {
 }
 
 function handleMemorySummaryEvent(data) {
-  const removedCount = Number(data?.sourceMessageCount || 0);
-  if (removedCount > 0) {
-    state.messages.splice(0, removedCount);
+  trimSummarizedMessages(Number(data?.sourceMessageCount || 0));
+  refreshMemoryEntries({ silent: true });
+  statusText.textContent = "Older messages were summarized into persistent memory.";
+}
+
+function trimSummarizedMessages(chatMessageCount) {
+  if (chatMessageCount <= 0) {
+    return;
+  }
+
+  let seenChatMessages = 0;
+  let removeUntilIndex = -1;
+
+  for (let index = 0; index < state.messages.length; index += 1) {
+    if (isChatMessage(state.messages[index])) {
+      seenChatMessages += 1;
+    }
+
+    if (seenChatMessages >= chatMessageCount) {
+      removeUntilIndex = index;
+      break;
+    }
+  }
+
+  if (removeUntilIndex >= 0) {
+    state.messages.splice(0, removeUntilIndex + 1);
     persistState();
     renderMessages({ streamingIndex: state.messages.length - 1 });
   }
-
-  refreshMemoryEntries({ silent: true });
-  statusText.textContent = "Older messages were summarized into persistent memory.";
 }
 
 function handleModelOverrideEvent(data) {
@@ -659,6 +700,54 @@ function handleRoutingEvent(data) {
   }
 
   showRuntimeNotice(`→ Routed to ${data.model} (${data.reason || "automatic routing"})`);
+}
+
+function handleToolCallEvent(data) {
+  const toolMessage = {
+    role: "tool",
+    toolName: data?.name || "tool",
+    toolState: "calling",
+    content: `⚙️ Calling tool: ${formatToolInvocation(data?.name, data?.args)}`
+  };
+
+  insertTimelineMessage(toolMessage);
+}
+
+function handleToolResultEvent(data) {
+  const resultText = formatToolResult(data?.result);
+  const existing = [...state.messages]
+    .reverse()
+    .find((message) => message.role === "tool" && message.toolState === "calling" && message.toolName === data?.name);
+
+  if (existing) {
+    existing.toolState = "done";
+    existing.content = `✅ ${data?.name || "tool"} → ${resultText}`;
+    persistState();
+    renderMessages({ streamingIndex: state.messages.indexOf(streamingAssistantMessage) });
+    return;
+  }
+
+  insertTimelineMessage({
+    role: "tool",
+    toolName: data?.name || "tool",
+    toolState: "done",
+    content: `✅ ${data?.name || "tool"} → ${resultText}`
+  });
+}
+
+function insertTimelineMessage(message) {
+  const assistantIndex = streamingAssistantMessage ? state.messages.indexOf(streamingAssistantMessage) : -1;
+
+  if (assistantIndex >= 0) {
+    state.messages.splice(assistantIndex, 0, message);
+    persistState();
+    renderMessages({ streamingIndex: state.messages.indexOf(streamingAssistantMessage) });
+    return;
+  }
+
+  state.messages.push(message);
+  persistState();
+  renderMessages();
 }
 
 function parseSse(rawEvent) {
@@ -724,7 +813,11 @@ function renderMessages(options = {}) {
       node.classList.add("streaming");
     }
 
-    roleTag.textContent = message.role === "user" ? "You" : "Assistant";
+    roleTag.textContent = message.role === "user"
+      ? "You"
+      : message.role === "tool"
+        ? "Tool"
+        : "Assistant";
     renderMessageBody(body, message);
     messageList.appendChild(node);
   });
@@ -753,14 +846,15 @@ function renderMessageBody(body, message) {
 }
 
 function updateMemoryBadge() {
-  const turnCount = Math.ceil(state.messages.length / 2);
+  const turnCount = Math.ceil(state.messages.filter(isChatMessage).length / 2);
   memoryBadge.textContent = `Memory ${turnCount} turns`;
 }
 
 function getRequestMessages(messages, memoryTurns) {
-  const selectedMessages = messages.length > SUMMARY_THRESHOLD
-    ? messages
-    : messages.slice(-Math.max(1, Number(memoryTurns) || defaultState.memoryTurns) * 2);
+  const chatMessages = messages.filter(isChatMessage);
+  const selectedMessages = chatMessages.length > SUMMARY_THRESHOLD
+    ? chatMessages
+    : chatMessages.slice(-Math.max(1, Number(memoryTurns) || defaultState.memoryTurns) * 2);
 
   return selectedMessages.map((message) => {
     const payload = {
@@ -832,6 +926,7 @@ function syncStateFromControls() {
   state.model = modelSelect.value;
   state.customModel = customModelInput.value.trim();
   state.autoRoute = autoRouteToggle.checked;
+  state.toolsEnabled = toolsToggle.checked;
   state.systemPrompt = systemPromptInput.value;
   state.temperature = Number(temperatureInput.value || defaultState.temperature);
   state.topP = Number(topPInput.value || defaultState.topP);
@@ -922,6 +1017,22 @@ function readFileAsDataUrl(file) {
 function extractMimeTypeFromDataUrl(dataUrl) {
   const match = /^data:([^;,]+)[;,]/.exec(dataUrl);
   return match?.[1] || "";
+}
+
+function isChatMessage(message) {
+  return message?.role === "user" || message?.role === "assistant";
+}
+
+function formatToolInvocation(name, args) {
+  return `${name || "tool"}(${JSON.stringify(args || {})})`;
+}
+
+function formatToolResult(result) {
+  if (typeof result === "string") {
+    return result;
+  }
+
+  return JSON.stringify(result);
 }
 
 async function safeParseJson(response) {
