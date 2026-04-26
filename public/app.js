@@ -1,64 +1,85 @@
-const LEGACY_STORAGE_KEY = "my-own-chatgpt-state-v1";
-const ACTIVE_CHAT_KEY = "my-own-chatgpt-active-chat-v2";
-const CHAT_KEY_PREFIX = "chat_";
-const SUMMARY_THRESHOLD = 20;
-const IMAGE_BASE64_LIMIT = 13_000_000;
+import {
+  initializeActiveChatId,
+  loadChatState,
+  createDefaultState,
+  createChatId,
+  persistChatState,
+  listStoredChats,
+  isChatMessage,
+  getRequestMessages,
+  defaultState
+} from "./modules/state.js";
+import {
+  getHealth,
+  getMemoryEntries,
+  saveMemoryEntry,
+  deleteMemoryEntry,
+  requestChatStream,
+  consumeSse,
+  safeParseJson
+} from "./modules/api.js";
+import {
+  populateModelOptions,
+  updateMemoryBadge,
+  renderSessionList,
+  renderMessages as renderMessagesView,
+  renderPendingImage,
+  showRuntimeNotice,
+  hideRuntimeNotice,
+  setComposerEnabled,
+  setStreamingUi
+} from "./modules/ui.js";
+import { renderMemoryEntries as renderMemoryEntriesView } from "./modules/memory-ui.js";
+import {
+  createToolCallMessage,
+  applyToolResult,
+  createCompletedToolMessage
+} from "./modules/tools-ui.js";
 
-const defaultState = {
-  model: "gemini-2.5-flash",
-  customModel: "",
-  autoRoute: false,
-  toolsEnabled: false,
-  systemPrompt: "You are a helpful AI assistant. Answer clearly and concisely.",
-  temperature: 0.7,
-  topP: 1,
-  maxOutputTokens: 512,
-  memoryTurns: 6,
-  messages: [],
-  createdAt: "",
-  updatedAt: ""
-};
+const IMAGE_BASE64_LIMIT = 13_000_000;
 
 let activeChatId = initializeActiveChatId();
 let state = loadChatState(activeChatId);
 
-const chatPanel = document.querySelector(".chat-panel");
-const runtimeNotice = document.querySelector("#runtimeNotice");
-const chatSessionList = document.querySelector("#chatSessionList");
-const newChatButton = document.querySelector("#newChatButton");
-const exportButton = document.querySelector("#exportButton");
-const exportMenu = document.querySelector("#exportMenu");
-const exportJsonButton = document.querySelector("#exportJsonButton");
-const exportMarkdownButton = document.querySelector("#exportMarkdownButton");
-const modelField = document.querySelector("#modelField");
-const customModelField = document.querySelector("#customModelField");
-const modelSelect = document.querySelector("#modelSelect");
-const customModelInput = document.querySelector("#customModelInput");
-const autoRouteToggle = document.querySelector("#autoRouteToggle");
-const toolsToggle = document.querySelector("#toolsToggle");
-const systemPromptInput = document.querySelector("#systemPromptInput");
-const temperatureInput = document.querySelector("#temperatureInput");
-const topPInput = document.querySelector("#topPInput");
-const maxTokensInput = document.querySelector("#maxTokensInput");
-const memoryTurnsInput = document.querySelector("#memoryTurnsInput");
-const savePresetButton = document.querySelector("#savePresetButton");
-const clearChatButton = document.querySelector("#clearChatButton");
-const statusText = document.querySelector("#statusText");
-const memoryBadge = document.querySelector("#memoryBadge");
-const messageList = document.querySelector("#messageList");
-const composerForm = document.querySelector("#composerForm");
-const userInput = document.querySelector("#userInput");
-const stopButton = document.querySelector("#stopButton");
-const sendButton = document.querySelector("#sendButton");
-const messageTemplate = document.querySelector("#messageTemplate");
-const memoryInput = document.querySelector("#memoryInput");
-const addMemoryButton = document.querySelector("#addMemoryButton");
-const memoryList = document.querySelector("#memoryList");
-const memoryCountBadge = document.querySelector("#memoryCountBadge");
-const attachImageButton = document.querySelector("#attachImageButton");
-const voiceInputButton = document.querySelector("#voiceInputButton");
-const imageInput = document.querySelector("#imageInput");
-const pendingImageContainer = document.querySelector("#pendingImageContainer");
+const elements = {
+  chatPanel: document.querySelector(".chat-panel"),
+  runtimeNotice: document.querySelector("#runtimeNotice"),
+  chatSessionList: document.querySelector("#chatSessionList"),
+  newChatButton: document.querySelector("#newChatButton"),
+  exportButton: document.querySelector("#exportButton"),
+  exportMenu: document.querySelector("#exportMenu"),
+  exportJsonButton: document.querySelector("#exportJsonButton"),
+  exportMarkdownButton: document.querySelector("#exportMarkdownButton"),
+  modelField: document.querySelector("#modelField"),
+  customModelField: document.querySelector("#customModelField"),
+  modelSelect: document.querySelector("#modelSelect"),
+  customModelInput: document.querySelector("#customModelInput"),
+  autoRouteToggle: document.querySelector("#autoRouteToggle"),
+  toolsToggle: document.querySelector("#toolsToggle"),
+  systemPromptInput: document.querySelector("#systemPromptInput"),
+  temperatureInput: document.querySelector("#temperatureInput"),
+  topPInput: document.querySelector("#topPInput"),
+  maxTokensInput: document.querySelector("#maxTokensInput"),
+  memoryTurnsInput: document.querySelector("#memoryTurnsInput"),
+  savePresetButton: document.querySelector("#savePresetButton"),
+  clearChatButton: document.querySelector("#clearChatButton"),
+  statusText: document.querySelector("#statusText"),
+  memoryBadge: document.querySelector("#memoryBadge"),
+  messageList: document.querySelector("#messageList"),
+  composerForm: document.querySelector("#composerForm"),
+  userInput: document.querySelector("#userInput"),
+  stopButton: document.querySelector("#stopButton"),
+  sendButton: document.querySelector("#sendButton"),
+  messageTemplate: document.querySelector("#messageTemplate"),
+  memoryInput: document.querySelector("#memoryInput"),
+  addMemoryButton: document.querySelector("#addMemoryButton"),
+  memoryList: document.querySelector("#memoryList"),
+  memoryCountBadge: document.querySelector("#memoryCountBadge"),
+  attachImageButton: document.querySelector("#attachImageButton"),
+  voiceInputButton: document.querySelector("#voiceInputButton"),
+  imageInput: document.querySelector("#imageInput"),
+  pendingImageContainer: document.querySelector("#pendingImageContainer")
+};
 
 let abortController = null;
 let serverModels = [];
@@ -77,29 +98,29 @@ async function boot() {
   bindEvents();
   setupVoiceInput();
   syncControlsFromState();
-  renderSessionList();
+  renderSessionListView();
   renderMessages();
-  renderMemoryEntries();
-  renderPendingImage();
+  renderMemoryEntriesPanel();
+  renderPendingImageView();
 
   await Promise.all([
-    loadHealth(),
+    loadHealthStatus(),
     refreshMemoryEntries({ silent: true })
   ]);
 }
 
 function bindEvents() {
-  composerForm.addEventListener("submit", handleSubmit);
-  stopButton.addEventListener("click", stopStreaming);
-  clearChatButton.addEventListener("click", clearChat);
-  savePresetButton.addEventListener("click", saveSettingsOnly);
-  addMemoryButton.addEventListener("click", handleAddMemory);
-  attachImageButton.addEventListener("click", () => imageInput.click());
-  imageInput.addEventListener("change", handleImageInputChange);
-  newChatButton.addEventListener("click", createNewChat);
-  exportButton.addEventListener("click", toggleExportMenu);
-  exportJsonButton.addEventListener("click", exportCurrentChatAsJson);
-  exportMarkdownButton.addEventListener("click", exportCurrentChatAsMarkdown);
+  elements.composerForm.addEventListener("submit", handleSubmit);
+  elements.stopButton.addEventListener("click", stopStreaming);
+  elements.clearChatButton.addEventListener("click", clearChat);
+  elements.savePresetButton.addEventListener("click", saveSettingsOnly);
+  elements.addMemoryButton.addEventListener("click", handleAddMemory);
+  elements.attachImageButton.addEventListener("click", () => elements.imageInput.click());
+  elements.imageInput.addEventListener("change", handleImageInputChange);
+  elements.newChatButton.addEventListener("click", createNewChat);
+  elements.exportButton.addEventListener("click", toggleExportMenu);
+  elements.exportJsonButton.addEventListener("click", exportCurrentChatAsJson);
+  elements.exportMarkdownButton.addEventListener("click", exportCurrentChatAsMarkdown);
 
   document.addEventListener("click", (event) => {
     if (!event.target.closest(".export-shell")) {
@@ -107,57 +128,57 @@ function bindEvents() {
     }
   });
 
-  memoryInput.addEventListener("keydown", (event) => {
+  elements.memoryInput.addEventListener("keydown", (event) => {
     if (event.key === "Enter") {
       event.preventDefault();
       handleAddMemory();
     }
   });
 
-  modelSelect.addEventListener("change", () => {
-    state.model = modelSelect.value;
+  elements.modelSelect.addEventListener("change", () => {
+    state.model = elements.modelSelect.value;
     persistState();
   });
 
-  customModelInput.addEventListener("input", () => {
-    state.customModel = customModelInput.value.trim();
+  elements.customModelInput.addEventListener("input", () => {
+    state.customModel = elements.customModelInput.value.trim();
     persistState();
   });
 
-  autoRouteToggle.addEventListener("change", () => {
-    state.autoRoute = autoRouteToggle.checked;
+  elements.autoRouteToggle.addEventListener("change", () => {
+    state.autoRoute = elements.autoRouteToggle.checked;
     updateModelControlsVisibility();
     persistState();
   });
 
-  toolsToggle.addEventListener("change", () => {
-    state.toolsEnabled = toolsToggle.checked;
+  elements.toolsToggle.addEventListener("change", () => {
+    state.toolsEnabled = elements.toolsToggle.checked;
     persistState();
   });
 
-  systemPromptInput.addEventListener("input", () => {
-    state.systemPrompt = systemPromptInput.value;
+  elements.systemPromptInput.addEventListener("input", () => {
+    state.systemPrompt = elements.systemPromptInput.value;
     persistState();
   });
 
-  temperatureInput.addEventListener("input", () => {
-    state.temperature = Number(temperatureInput.value || defaultState.temperature);
+  elements.temperatureInput.addEventListener("input", () => {
+    state.temperature = Number(elements.temperatureInput.value || defaultState.temperature);
     persistState();
   });
 
-  topPInput.addEventListener("input", () => {
-    state.topP = Number(topPInput.value || defaultState.topP);
+  elements.topPInput.addEventListener("input", () => {
+    state.topP = Number(elements.topPInput.value || defaultState.topP);
     persistState();
   });
 
-  maxTokensInput.addEventListener("input", () => {
-    state.maxOutputTokens = Number(maxTokensInput.value || defaultState.maxOutputTokens);
+  elements.maxTokensInput.addEventListener("input", () => {
+    state.maxOutputTokens = Number(elements.maxTokensInput.value || defaultState.maxOutputTokens);
     persistState();
   });
 
-  memoryTurnsInput.addEventListener("input", () => {
-    state.memoryTurns = Number(memoryTurnsInput.value || defaultState.memoryTurns);
-    updateMemoryBadge();
+  elements.memoryTurnsInput.addEventListener("input", () => {
+    state.memoryTurns = Number(elements.memoryTurnsInput.value || defaultState.memoryTurns);
+    renderMemoryBadge();
     persistState();
   });
 
@@ -176,7 +197,7 @@ function bindDragAndDrop() {
 
     dragDepth += 1;
     event.preventDefault();
-    chatPanel.classList.add("drag-active");
+    elements.chatPanel.classList.add("drag-active");
   };
 
   const handleDragLeave = (event) => {
@@ -186,7 +207,7 @@ function bindDragAndDrop() {
 
     dragDepth = Math.max(0, dragDepth - 1);
     if (dragDepth === 0) {
-      chatPanel.classList.remove("drag-active");
+      elements.chatPanel.classList.remove("drag-active");
     }
   };
 
@@ -206,21 +227,21 @@ function bindDragAndDrop() {
 
     event.preventDefault();
     dragDepth = 0;
-    chatPanel.classList.remove("drag-active");
+    elements.chatPanel.classList.remove("drag-active");
     await useSelectedImageFile(event.dataTransfer.files[0]);
   };
 
-  chatPanel.addEventListener("dragenter", handleDragEnter);
-  chatPanel.addEventListener("dragleave", handleDragLeave);
-  chatPanel.addEventListener("dragover", handleDragOver);
-  chatPanel.addEventListener("drop", handleDrop);
+  elements.chatPanel.addEventListener("dragenter", handleDragEnter);
+  elements.chatPanel.addEventListener("dragleave", handleDragLeave);
+  elements.chatPanel.addEventListener("dragover", handleDragOver);
+  elements.chatPanel.addEventListener("drop", handleDrop);
 }
 
 function setupVoiceInput() {
   const SpeechRecognition = window.SpeechRecognition || window.webkitSpeechRecognition;
   if (!SpeechRecognition) {
-    voiceInputButton.disabled = true;
-    voiceInputButton.title = "Speech not supported in this browser";
+    elements.voiceInputButton.disabled = true;
+    elements.voiceInputButton.title = "Speech not supported in this browser";
     return;
   }
 
@@ -229,7 +250,7 @@ function setupVoiceInput() {
   speechRecognition.interimResults = false;
   speechRecognition.maxAlternatives = 1;
 
-  voiceInputButton.addEventListener("click", () => {
+  elements.voiceInputButton.addEventListener("click", () => {
     if (!speechRecognition || isListening) {
       return;
     }
@@ -237,18 +258,18 @@ function setupVoiceInput() {
     try {
       speechRecognition.start();
     } catch {
-      statusText.textContent = "Voice input could not start.";
+      elements.statusText.textContent = "Voice input could not start.";
     }
   });
 
   speechRecognition.addEventListener("start", () => {
     isListening = true;
-    statusText.textContent = "Listening for speech input...";
+    elements.statusText.textContent = "Listening for speech input...";
   });
 
   speechRecognition.addEventListener("end", () => {
     isListening = false;
-    statusText.textContent = "Voice input ready.";
+    elements.statusText.textContent = "Voice input ready.";
   });
 
   speechRecognition.addEventListener("result", (event) => {
@@ -258,125 +279,82 @@ function setupVoiceInput() {
       .trim();
 
     if (transcript) {
-      userInput.value = transcript;
-      userInput.focus();
-      statusText.textContent = "Speech captured. Review and send when ready.";
+      elements.userInput.value = transcript;
+      elements.userInput.focus();
+      elements.statusText.textContent = "Speech captured. Review and send when ready.";
     }
   });
 
   speechRecognition.addEventListener("error", (event) => {
     isListening = false;
-    statusText.textContent = event.error === "not-allowed"
+    elements.statusText.textContent = event.error === "not-allowed"
       ? "Microphone permission was denied."
       : "Voice input failed.";
   });
 }
 
-async function loadHealth() {
+async function loadHealthStatus() {
   try {
-    const response = await fetch("/api/health");
-    const data = await response.json();
+    const data = await getHealth();
     serverModels = Array.isArray(data.models) ? data.models : [];
-    populateModelOptions(serverModels);
+    populateModelOptions(elements.modelSelect, serverModels, defaultState.model, state.model);
 
     if (!data.hasApiKey) {
-      statusText.textContent = "GEMINI_API_KEY is missing. Create a .env file first.";
-      setComposerEnabled(false);
+      elements.statusText.textContent = "GEMINI_API_KEY is missing. Create a .env file first.";
+      setComposerEnabled(elements, false, Boolean(speechRecognition));
       return;
     }
 
-    statusText.textContent = "Gemini API is ready. Persistent memory is available.";
-    setComposerEnabled(true);
+    elements.statusText.textContent = `Gemini API is ready. Memory entries: ${data.memoryCount}. Tools: ${data.tools?.names?.join(", ") || "none"}.`;
+    setComposerEnabled(elements, true, Boolean(speechRecognition));
   } catch {
-    statusText.textContent = "Cannot reach the local server. Make sure server.js is running.";
-    populateModelOptions(serverModels);
-    setComposerEnabled(false);
-  }
-}
-
-function populateModelOptions(models) {
-  const options = [...models];
-  if (!options.includes(defaultState.model)) {
-    options.unshift(defaultState.model);
-  }
-
-  modelSelect.innerHTML = "";
-
-  for (const model of options) {
-    const option = document.createElement("option");
-    option.value = model;
-    option.textContent = model;
-    modelSelect.appendChild(option);
-  }
-
-  if (state.model && options.includes(state.model)) {
-    modelSelect.value = state.model;
+    elements.statusText.textContent = "Cannot reach the local server. Make sure server.js is running.";
+    populateModelOptions(elements.modelSelect, serverModels, defaultState.model, state.model);
+    setComposerEnabled(elements, false, Boolean(speechRecognition));
   }
 }
 
 function syncControlsFromState() {
-  modelSelect.value = state.model;
-  customModelInput.value = state.customModel;
-  autoRouteToggle.checked = Boolean(state.autoRoute);
-  toolsToggle.checked = Boolean(state.toolsEnabled);
-  systemPromptInput.value = state.systemPrompt;
-  temperatureInput.value = String(state.temperature);
-  topPInput.value = String(state.topP);
-  maxTokensInput.value = String(state.maxOutputTokens);
-  memoryTurnsInput.value = String(state.memoryTurns);
+  elements.modelSelect.value = state.model;
+  elements.customModelInput.value = state.customModel;
+  elements.autoRouteToggle.checked = Boolean(state.autoRoute);
+  elements.toolsToggle.checked = Boolean(state.toolsEnabled);
+  elements.systemPromptInput.value = state.systemPrompt;
+  elements.temperatureInput.value = String(state.temperature);
+  elements.topPInput.value = String(state.topP);
+  elements.maxTokensInput.value = String(state.maxOutputTokens);
+  elements.memoryTurnsInput.value = String(state.memoryTurns);
   updateModelControlsVisibility();
-  updateMemoryBadge();
+  renderMemoryBadge();
 }
 
 function updateModelControlsVisibility() {
   const hidden = Boolean(state.autoRoute);
-  modelField.hidden = hidden;
-  customModelField.hidden = hidden;
-}
-
-function setComposerEnabled(enabled) {
-  userInput.disabled = !enabled;
-  sendButton.disabled = !enabled;
-  attachImageButton.disabled = !enabled;
-  if (!speechRecognition) {
-    voiceInputButton.disabled = true;
-  } else {
-    voiceInputButton.disabled = !enabled;
-  }
+  elements.modelField.hidden = hidden;
+  elements.customModelField.hidden = hidden;
 }
 
 function saveSettingsOnly() {
   syncStateFromControls();
   persistState();
-  statusText.textContent = "Settings saved to localStorage.";
-}
-
-function clearChat() {
-  stopStreaming();
-  state.messages = [];
-  editingMessageIndex = -1;
-  clearPendingImage();
-  persistState();
-  renderMessages();
-  renderSessionList();
-  statusText.textContent = "Chat history cleared.";
+  elements.statusText.textContent = "Settings saved to localStorage.";
 }
 
 function createNewChat() {
   stopStreaming();
   closeExportMenu();
   clearPendingImage();
-  hideRuntimeNotice();
+  hideRuntimeNotice(elements.runtimeNotice);
   editingMessageIndex = -1;
   activeChatId = createChatId();
   state = createDefaultState();
   persistState();
   syncControlsFromState();
   renderMessages();
-  renderSessionList();
-  userInput.value = "";
-  userInput.focus();
-  statusText.textContent = "Started a new chat.";
+  renderSessionListView();
+  elements.userInput.value = "";
+  elements.userInput.focus();
+  elements.statusText.textContent = "Started a new chat.";
 }
 
 function switchChat(chatId) {
@@ -387,16 +365,16 @@ function switchChat(chatId) {
   stopStreaming();
   closeExportMenu();
   clearPendingImage();
-  hideRuntimeNotice();
+  hideRuntimeNotice(elements.runtimeNotice);
   editingMessageIndex = -1;
   activeChatId = chatId;
-  localStorage.setItem(ACTIVE_CHAT_KEY, activeChatId);
+  localStorage.setItem("my-own-chatgpt-active-chat-v2", activeChatId);
   state = loadChatState(chatId);
   syncControlsFromState();
   renderMessages();
-  renderSessionList();
-  userInput.value = "";
-  statusText.textContent = "Switched chat.";
+  renderSessionListView();
+  elements.userInput.value = "";
+  elements.statusText.textContent = "Switched chat.";
 }
 
 function deleteChat(chatId) {
@@ -416,76 +394,41 @@ function deleteChat(chatId) {
     } else {
       activeChatId = remainingSessions[0].id;
       state = loadChatState(activeChatId);
-      localStorage.setItem(ACTIVE_CHAT_KEY, activeChatId);
+      localStorage.setItem("my-own-chatgpt-active-chat-v2", activeChatId);
     }
 
     clearPendingImage();
-    hideRuntimeNotice();
+    hideRuntimeNotice(elements.runtimeNotice);
     editingMessageIndex = -1;
     syncControlsFromState();
     renderMessages();
   }
 
-  renderSessionList();
-  statusText.textContent = "Chat deleted.";
+  renderSessionListView();
+  elements.statusText.textContent = "Chat deleted.";
 }
 
-function renderSessionList() {
-  chatSessionList.innerHTML = "";
-  const sessions = listStoredChats();
+function clearChat() {
+  stopStreaming();
+  state.messages = [];
+  editingMessageIndex = -1;
+  clearPendingImage();
+  persistState();
+  renderMessages();
+  renderSessionListView();
+  elements.statusText.textContent = "Chat history cleared.";
+}
 
-  if (sessions.length === 0) {
-    const empty = document.createElement("p");
-    empty.className = "memory-empty";
-    empty.textContent = "No chats yet. Start a new conversation to create one.";
-    chatSessionList.appendChild(empty);
-    return;
-  }
-
-  sessions.forEach((session) => {
-    const item = document.createElement("article");
-    item.className = "chat-session-item";
-    if (session.id === activeChatId) {
-      item.classList.add("active");
-    }
-
-    const button = document.createElement("button");
-    button.className = "chat-session-button";
-    button.type = "button";
-    button.addEventListener("click", () => switchChat(session.id));
-
-    const title = document.createElement("p");
-    title.className = "chat-session-title";
-    title.textContent = session.title;
-
-    const meta = document.createElement("p");
-    meta.className = "chat-session-meta";
-    meta.textContent = session.updatedAt
-      ? new Date(session.updatedAt).toLocaleString()
-      : "Not saved yet";
-
-    button.append(title, meta);
-
-    const removeButton = document.createElement("button");
-    removeButton.className = "danger-button";
-    removeButton.type = "button";
-    removeButton.textContent = "Delete";
-    removeButton.addEventListener("click", (event) => {
-      event.stopPropagation();
-      deleteChat(session.id);
-    });
-
-    item.append(button, removeButton);
-    chatSessionList.appendChild(item);
-  });
+function renderSessionListView() {
+  renderSessionList(elements.chatSessionList, listStoredChats(), activeChatId, switchChat, deleteChat);
 }
 
 function toggleExportMenu() {
-  exportMenu.hidden = !exportMenu.hidden;
+  elements.exportMenu.hidden = !elements.exportMenu.hidden;
 }
 
 function closeExportMenu() {
-  exportMenu.hidden = true;
+  elements.exportMenu.hidden = true;
 }
 
 function exportCurrentChatAsJson() {
@@ -512,55 +455,36 @@ function downloadTextFile(filename, text, mimeType) {
 }
 
 async function handleAddMemory() {
-  const summary = memoryInput.value.trim();
+  const summary = elements.memoryInput.value.trim();
   if (!summary) {
     return;
   }
 
-  addMemoryButton.disabled = true;
+  elements.addMemoryButton.disabled = true;
 
   try {
-    const response = await fetch("/api/memory", {
-      method: "POST",
-      headers: {
-        "Content-Type": "application/json"
-      },
-      body: JSON.stringify({
-        summary,
-        sourceMessageCount: 0
-      })
+    await saveMemoryEntry({
+      summary,
+      sourceMessageCount: 0
     });
 
-    if (!response.ok) {
-      const error = await safeParseJson(response);
-      throw new Error(error?.error || "Failed to save memory.");
-    }
-
-    memoryInput.value = "";
+    elements.memoryInput.value = "";
     await refreshMemoryEntries({ silent: true });
-    statusText.textContent = "Persistent memory saved.";
+    elements.statusText.textContent = "Persistent memory saved.";
   } catch (error) {
-    statusText.textContent = error.message || "Failed to save memory.";
+    elements.statusText.textContent = error.message || "Failed to save memory.";
   } finally {
-    addMemoryButton.disabled = false;
+    elements.addMemoryButton.disabled = false;
   }
 }
 
 async function handleDeleteMemory(id) {
   try {
-    const response = await fetch(`/api/memory/${encodeURIComponent(id)}`, {
-      method: "DELETE"
-    });
-
-    if (!response.ok) {
-      const error = await safeParseJson(response);
-      throw new Error(error?.error || "Failed to delete memory.");
-    }
-
+    await deleteMemoryEntry(id);
     await refreshMemoryEntries({ silent: true });
-    statusText.textContent = "Memory entry deleted.";
+    elements.statusText.textContent = "Memory entry deleted.";
   } catch (error) {
-    statusText.textContent = error.message || "Failed to delete memory.";
+    elements.statusText.textContent = error.message || "Failed to delete memory.";
   }
 }
 
@@ -568,62 +492,24 @@ async function refreshMemoryEntries(options = {}) {
   const { silent = false } = options;
 
   try {
-    const response = await fetch("/api/memory");
-    if (!response.ok) {
-      throw new Error("Failed to load memory.");
-    }
-
-    const data = await response.json();
-    memoryEntries = Array.isArray(data) ? data : [];
-    renderMemoryEntries();
+    memoryEntries = await getMemoryEntries();
+    renderMemoryEntriesPanel();
   } catch (error) {
     if (!silent) {
-      statusText.textContent = error.message || "Failed to load memory.";
+      elements.statusText.textContent = error.message || "Failed to load memory.";
     }
     memoryEntries = [];
-    renderMemoryEntries();
+    renderMemoryEntriesPanel();
   }
 }
 
-function renderMemoryEntries() {
-  memoryList.innerHTML = "";
-  memoryCountBadge.textContent = `${memoryEntries.length} entr${memoryEntries.length === 1 ? "y" : "ies"}`;
-
-  if (memoryEntries.length === 0) {
-    const empty = document.createElement("p");
-    empty.className = "memory-empty";
-    empty.textContent = "No persistent memory yet. Save preferences or let auto-summarization collect them after long chats.";
-    memoryList.appendChild(empty);
-    return;
-  }
-
-  memoryEntries.forEach((entry) => {
-    const card = document.createElement("article");
-    card.className = "memory-card";
-
-    const summary = document.createElement("p");
-    summary.className = "memory-summary";
-    summary.textContent = entry.summary;
-
-    const footer = document.createElement("div");
-    footer.className = "memory-footer";
-
-    const meta = document.createElement("p");
-    meta.className = "memory-meta";
-    meta.textContent = formatMemoryMeta(entry);
-
-    const button = document.createElement("button");
-    button.className = "danger-button";
-    button.type = "button";
-    button.textContent = "Delete";
-    button.addEventListener("click", () => {
-      handleDeleteMemory(entry.id);
-    });
-
-    footer.append(meta, button);
-    card.append(summary, footer);
-    memoryList.appendChild(card);
-  });
+function renderMemoryEntriesPanel() {
+  renderMemoryEntriesView(
+    elements.memoryList,
+    elements.memoryCountBadge,
+    memoryEntries,
+    handleDeleteMemory
+  );
 }
 
 async function handleImageInputChange(event) {
@@ -637,7 +523,7 @@ async function handleImageInputChange(event) {
 
 async function useSelectedImageFile(file) {
   if (!file.type.startsWith("image/")) {
-    statusText.textContent = "Only image files are supported.";
+    elements.statusText.textContent = "Only image files are supported.";
     return;
   }
 
@@ -662,57 +548,22 @@ async function useSelectedImageFile(file) {
       dataUrl
     };
 
-    renderPendingImage();
-    statusText.textContent = "Image attached. Add a prompt and send it with the message.";
+    renderPendingImageView();
+    elements.statusText.textContent = "Image attached. Add a prompt and send it with the message.";
   } catch (error) {
     clearPendingImage();
-    statusText.textContent = error.message || "Failed to load image.";
+    elements.statusText.textContent = error.message || "Failed to load image.";
   }
 }
 
-function renderPendingImage() {
-  pendingImageContainer.innerHTML = "";
-
-  if (!pendingImage) {
-    pendingImageContainer.hidden = true;
-    return;
-  }
-
-  pendingImageContainer.hidden = false;
-
-  const card = document.createElement("div");
-  card.className = "pending-image-card";
-
-  const preview = document.createElement("img");
-  preview.src = pendingImage.dataUrl;
-  preview.alt = pendingImage.name || "Pending image preview";
-
-  const copy = document.createElement("div");
-  copy.className = "pending-image-copy";
-
-  const title = document.createElement("p");
-  title.className = "pending-image-title";
-  title.textContent = pendingImage.name || "Attached image";
-
-  const meta = document.createElement("p");
-  meta.className = "pending-image-meta";
-  meta.textContent = `${pendingImage.mimeType} • ${Math.round(pendingImage.base64Data.length / 1024)} KB base64`;
-
-  const removeButton = document.createElement("button");
-  removeButton.className = "remove-image-button";
-  removeButton.type = "button";
-  removeButton.textContent = "✕";
-  removeButton.addEventListener("click", clearPendingImage);
-
-  copy.append(title, meta);
-  card.append(preview, copy, removeButton);
-  pendingImageContainer.appendChild(card);
+function renderPendingImageView() {
+  renderPendingImage(elements.pendingImageContainer, pendingImage, clearPendingImage);
 }
 
 function clearPendingImage() {
   pendingImage = null;
-  imageInput.value = "";
-  renderPendingImage();
+  elements.imageInput.value = "";
+  renderPendingImageView();
 }
 
 async function handleSubmit(event) {
@@ -721,7 +572,7 @@ async function handleSubmit(event) {
     return;
   }
 
-  const prompt = userInput.value.trim();
+  const prompt = elements.userInput.value.trim();
   if (!prompt) {
     return;
   }
@@ -729,7 +580,7 @@ async function handleSubmit(event) {
   closeExportMenu();
   syncStateFromControls();
   await refreshMemoryEntries({ silent: true });
-  hideRuntimeNotice();
+  hideRuntimeNotice(elements.runtimeNotice);
   editingMessageIndex = -1;
 
   const imageForMessage = pendingImage ? { ...pendingImage } : null;
@@ -740,72 +591,104 @@ async function handleSubmit(event) {
   streamingAssistantMessage = assistantMessage;
   clearPendingImage();
   persistState();
-  renderMessages({ streamingIndex: state.messages.length - 1 });
-  renderSessionList();
+  renderMessages(state.messages.length - 1);
+  renderSessionListView();
 
-  userInput.value = "";
-  userInput.focus();
+  elements.userInput.value = "";
+  elements.userInput.focus();
   await requestAssistantReply(assistantMessage);
 }
 
 async function requestAssistantReply(assistantMessage) {
   const selectedModel = state.customModel || state.model;
 
-  setStreamingUi(true);
-  statusText.textContent = `Streaming reply from ${selectedModel}...`;
+  setStreamingUi(elements, true, Boolean(speechRecognition));
+  elements.statusText.textContent = `Streaming reply from ${selectedModel}...`;
   lastFinishReason = "";
   abortController = new AbortController();
 
   try {
-    const response = await fetch("/api/chat", {
-      method: "POST",
-      headers: {
-        "Content-Type": "application/json"
-      },
-      body: JSON.stringify({
-        model: selectedModel,
-        systemPrompt: buildSystemPrompt(state.systemPrompt, memoryEntries),
-        temperature: state.temperature,
-        topP: state.topP,
-        maxOutputTokens: state.maxOutputTokens,
-        autoRoute: state.autoRoute,
-        tools: state.toolsEnabled,
-        messages: getRequestMessages(state.messages, state.memoryTurns)
-      }),
-      signal: abortController.signal
-    });
+    const response = await requestChatStream({
+      model: selectedModel,
+      systemPrompt: buildSystemPrompt(state.systemPrompt, memoryEntries),
+      temperature: state.temperature,
+      topP: state.topP,
+      maxOutputTokens: state.maxOutputTokens,
+      autoRoute: state.autoRoute,
+      tools: state.toolsEnabled,
+      messages: getRequestMessages(state.messages, state.memoryTurns)
+    }, abortController.signal);
 
     if (!response.ok || !response.body) {
       const data = await safeParseJson(response);
       throw new Error(data?.error || "Server request failed.");
     }
 
-    await consumeEventStream(response, assistantMessage);
+    await consumeSse(response, async (parsedEvent) => {
+      if (parsedEvent.event === "memory_summary") {
+        handleMemorySummaryEvent(parsedEvent.data);
+        return;
+      }
+
+      if (parsedEvent.event === "model_override") {
+        handleModelOverrideEvent(parsedEvent.data);
+        return;
+      }
+
+      if (parsedEvent.event === "routing") {
+        handleRoutingEvent(parsedEvent.data);
+        return;
+      }
+
+      if (parsedEvent.event === "tool_call") {
+        handleToolCallEvent(parsedEvent.data);
+        return;
+      }
+
+      if (parsedEvent.event === "tool_result") {
+        handleToolResultEvent(parsedEvent.data);
+        return;
+      }
+
+      if (parsedEvent.event === "token" && parsedEvent.data?.delta) {
+        assistantMessage.content += parsedEvent.data.delta;
+        persistState();
+        renderMessages(state.messages.indexOf(assistantMessage));
+      }
+
+      if (parsedEvent.event === "error") {
+        throw new Error(parsedEvent.data?.message || "Streaming failed.");
+      }
+
+      if (parsedEvent.event === "finish") {
+        lastFinishReason = parsedEvent.data?.reason || "";
+      }
+    });
 
     if (!assistantMessage.content.trim()) {
       assistantMessage.content = "The model returned no content.";
     }
 
-    statusText.textContent = lastFinishReason === "MAX_TOKENS"
+    elements.statusText.textContent = lastFinishReason === "MAX_TOKENS"
       ? "Reply stopped because max output tokens was reached."
       : "Reply completed.";
   } catch (error) {
     if (error.name === "AbortError") {
-      statusText.textContent = "Reply stopped.";
+      elements.statusText.textContent = "Reply stopped.";
       if (!assistantMessage.content.trim()) {
         state.messages = state.messages.filter((message) => message !== assistantMessage);
       }
     } else {
       assistantMessage.content = assistantMessage.content.trim() || `Error: ${error.message}`;
-      statusText.textContent = "Request failed. Check the API key, model name, or parameters.";
+      elements.statusText.textContent = "Request failed. Check the API key, model name, or parameters.";
     }
   } finally {
     abortController = null;
     streamingAssistantMessage = null;
-    setStreamingUi(false);
+    setStreamingUi(elements, false, Boolean(speechRecognition));
     persistState();
     renderMessages();
-    renderSessionList();
+    renderSessionListView();
   }
 }
 
@@ -833,79 +716,10 @@ function createUserMessage(prompt, image) {
   return message;
 }
 
-async function consumeEventStream(response, assistantMessage) {
-  const reader = response.body.getReader();
-  const decoder = new TextDecoder();
-  let buffer = "";
-
-  while (true) {
-    const { done, value } = await reader.read();
-    if (done) {
-      break;
-    }
-
-    buffer += decoder.decode(value, { stream: true });
-
-    while (buffer.includes("\n\n")) {
-      const boundaryIndex = buffer.indexOf("\n\n");
-      const rawEvent = buffer.slice(0, boundaryIndex);
-      buffer = buffer.slice(boundaryIndex + 2);
-      const parsedEvent = parseSse(rawEvent);
-
-      if (!parsedEvent) {
-        continue;
-      }
-
-      if (parsedEvent.event === "memory_summary") {
-        handleMemorySummaryEvent(parsedEvent.data);
-        continue;
-      }
-
-      if (parsedEvent.event === "model_override") {
-        handleModelOverrideEvent(parsedEvent.data);
-        continue;
-      }
-
-      if (parsedEvent.event === "routing") {
-        handleRoutingEvent(parsedEvent.data);
-        continue;
-      }
-
-      if (parsedEvent.event === "tool_call") {
-        handleToolCallEvent(parsedEvent.data);
-        continue;
-      }
-
-      if (parsedEvent.event === "tool_result") {
-        handleToolResultEvent(parsedEvent.data);
-        continue;
-      }
-
-      if (parsedEvent.event === "token" && parsedEvent.data?.delta) {
-        assistantMessage.content += parsedEvent.data.delta;
-        persistState();
-        renderMessages({ streamingIndex: state.messages.indexOf(assistantMessage) });
-      }
-
-      if (parsedEvent.event === "error") {
-        throw new Error(parsedEvent.data?.message || "Streaming failed.");
-      }
-
-      if (parsedEvent.event === "finish") {
-        lastFinishReason = parsedEvent.data?.reason || "";
-      }
-
-      if (parsedEvent.event === "done") {
-        return;
-      }
-    }
-  }
-}
-
 function handleMemorySummaryEvent(data) {
   trimSummarizedMessages(Number(data?.sourceMessageCount || 0));
   refreshMemoryEntries({ silent: true });
-  statusText.textContent = "Older messages were summarized into persistent memory.";
+  elements.statusText.textContent = "Older messages were summarized into persistent memory.";
 }
 
 function trimSummarizedMessages(chatMessageCount) {
@@ -930,7 +744,7 @@ function trimSummarizedMessages(chatMessageCount) {
   if (removeUntilIndex >= 0) {
     state.messages.splice(0, removeUntilIndex + 1);
     persistState();
-    renderMessages({ streamingIndex: state.messages.indexOf(streamingAssistantMessage) });
+    renderMessages(state.messages.indexOf(streamingAssistantMessage));
   }
 }
 
@@ -939,7 +753,7 @@ function handleModelOverrideEvent(data) {
     return;
   }
 
-  showRuntimeNotice(`Using ${data.model} because ${data.reason || "an image was attached"}.`);
+  showRuntimeNotice(elements.runtimeNotice, `Using ${data.model} because ${data.reason || "an image was attached"}.`);
 }
 
 function handleRoutingEvent(data) {
@@ -947,40 +761,21 @@ function handleRoutingEvent(data) {
     return;
   }
 
-  showRuntimeNotice(`→ Routed to ${data.model} (${data.reason || "automatic routing"})`);
+  showRuntimeNotice(elements.runtimeNotice, `→ Routed to ${data.model} (${data.reason || "automatic routing"})`);
 }
 
 function handleToolCallEvent(data) {
-  const toolMessage = {
-    role: "tool",
-    toolName: data?.name || "tool",
-    toolState: "calling",
-    content: `⚙️ Calling tool: ${formatToolInvocation(data?.name, data?.args)}`
-  };
-
-  insertTimelineMessage(toolMessage);
+  insertTimelineMessage(createToolCallMessage(data));
 }
 
 function handleToolResultEvent(data) {
-  const resultText = formatToolResult(data?.result);
-  const existing = [...state.messages]
-    .reverse()
-    .find((message) => message.role === "tool" && message.toolState === "calling" && message.toolName === data?.name);
-
-  if (existing) {
-    existing.toolState = "done";
-    existing.content = `✅ ${data?.name || "tool"} → ${resultText}`;
+  if (applyToolResult(state.messages, data)) {
     persistState();
-    renderMessages({ streamingIndex: state.messages.indexOf(streamingAssistantMessage) });
+    renderMessages(state.messages.indexOf(streamingAssistantMessage));
     return;
   }
 
-  insertTimelineMessage({
-    role: "tool",
-    toolName: data?.name || "tool",
-    toolState: "done",
-    content: `✅ ${data?.name || "tool"} → ${resultText}`
-  });
+  insertTimelineMessage(createCompletedToolMessage(data));
 }
 
 function insertTimelineMessage(message) {
@@ -989,7 +784,7 @@ function insertTimelineMessage(message) {
   if (assistantIndex >= 0) {
     state.messages.splice(assistantIndex, 0, message);
     persistState();
-    renderMessages({ streamingIndex: state.messages.indexOf(streamingAssistantMessage) });
+    renderMessages(state.messages.indexOf(streamingAssistantMessage));
     return;
   }
 
@@ -998,152 +793,26 @@ function insertTimelineMessage(message) {
   renderMessages();
 }
 
-function parseSse(rawEvent) {
-  const lines = rawEvent.split("\n");
-  let event = "message";
-  let data = "";
-
-  for (const line of lines) {
-    if (line.startsWith("event:")) {
-      event = line.slice(6).trim();
-    } else if (line.startsWith("data:")) {
-      data += line.slice(5).trim();
+function renderMessages(streamingIndex = -1) {
+  renderMessagesView({
+    container: elements.messageList,
+    messageTemplate: elements.messageTemplate,
+    messages: state.messages,
+    streamingIndex,
+    editingMessageIndex,
+    abortControllerActive: Boolean(abortController),
+    onStartEdit: (index) => {
+      editingMessageIndex = index;
+      renderMessages();
+    },
+    onRegenerate: regenerateFromMessage,
+    onCancelEdit: () => {
+      editingMessageIndex = -1;
+      renderMessages();
     }
-  }
-
-  if (!data) {
-    return null;
-  }
-
-  try {
-    return {
-      event,
-      data: JSON.parse(data)
-    };
-  } catch {
-    return null;
-  }
-}
-
-function stopStreaming() {
-  if (abortController) {
-    abortController.abort();
-  }
-}
-
-function setStreamingUi(active) {
-  stopButton.disabled = !active;
-  sendButton.disabled = active;
-  userInput.disabled = active;
-  attachImageButton.disabled = active;
-  if (speechRecognition) {
-    voiceInputButton.disabled = active;
-  }
-}
-
-function renderMessages(options = {}) {
-  const { streamingIndex = -1 } = options;
-  messageList.innerHTML = "";
-
-  if (state.messages.length === 0) {
-    const empty = document.createElement("p");
-    empty.className = "message-empty";
-    empty.textContent = "Start a new conversation. Adjust the model, system prompt, and parameters before sending your first message.";
-    messageList.appendChild(empty);
-    updateMemoryBadge();
-    return;
-  }
-
-  state.messages.forEach((message, index) => {
-    const node = messageTemplate.content.firstElementChild.cloneNode(true);
-    const roleTag = node.querySelector(".role-tag");
-    const editButton = node.querySelector(".message-edit-button");
-    const body = node.querySelector(".message-body");
-
-    node.classList.add(message.role);
-    if (index === streamingIndex) {
-      node.classList.add("streaming");
-    }
-
-    roleTag.textContent = message.role === "user"
-      ? "You"
-      : message.role === "tool"
-        ? "Tool"
-        : "Assistant";
-
-    if (message.role === "user" && !abortController) {
-      editButton.hidden = false;
-      editButton.addEventListener("click", () => {
-        editingMessageIndex = index;
-        renderMessages();
-      });
-    } else {
-      editButton.hidden = true;
-    }
-
-    renderMessageBody(body, message, index);
-    messageList.appendChild(node);
   });
 
-  updateMemoryBadge();
-  messageList.scrollTop = messageList.scrollHeight;
-}
-
-function renderMessageBody(body, message, index) {
-  body.innerHTML = "";
-
-  if (editingMessageIndex === index && message.role === "user") {
-    renderEditableMessage(body, message, index);
-    return;
-  }
-
-  if (message.imagePreviewUrl) {
-    const image = document.createElement("img");
-    image.className = "message-image";
-    image.src = message.imagePreviewUrl;
-    image.alt = message.imageName || "Uploaded image";
-    body.appendChild(image);
-  }
-
-  if (message.content) {
-    const text = document.createElement("div");
-    text.className = "message-text";
-    text.textContent = message.content;
-    body.appendChild(text);
-  }
-}
-
-function renderEditableMessage(body, message, index) {
-  const wrapper = document.createElement("div");
-  wrapper.className = "message-edit-area";
-
-  const textarea = document.createElement("textarea");
-  textarea.value = message.content || "";
-  textarea.rows = 5;
-
-  const buttonRow = document.createElement("div");
-  buttonRow.className = "composer-actions";
-
-  const regenerateButton = document.createElement("button");
-  regenerateButton.className = "primary-button";
-  regenerateButton.type = "button";
-  regenerateButton.textContent = "✓ Regenerate";
-  regenerateButton.addEventListener("click", async () => {
-    await regenerateFromMessage(index, textarea.value);
-  });
-
-  const cancelButton = document.createElement("button");
-  cancelButton.className = "secondary-button";
-  cancelButton.type = "button";
-  cancelButton.textContent = "Cancel";
-  cancelButton.addEventListener("click", () => {
-    editingMessageIndex = -1;
-    renderMessages();
-  });
-
-  buttonRow.append(regenerateButton, cancelButton);
-  wrapper.append(textarea, buttonRow);
-  body.appendChild(wrapper);
+  renderMemoryBadge();
 }
 
 async function regenerateFromMessage(index, nextText) {
@@ -1159,7 +828,7 @@ async function regenerateFromMessage(index, nextText) {
   closeExportMenu();
   syncStateFromControls();
   await refreshMemoryEntries({ silent: true });
-  hideRuntimeNotice();
+  hideRuntimeNotice(elements.runtimeNotice);
 
   const message = state.messages[index];
   if (!message || message.role !== "user") {
@@ -1175,8 +844,8 @@ async function regenerateFromMessage(index, nextText) {
   streamingAssistantMessage = assistantMessage;
 
   persistState();
-  renderMessages({ streamingIndex: state.messages.length - 1 });
-  renderSessionList();
+  renderMessages(state.messages.length - 1);
+  renderSessionListView();
   await requestAssistantReply(assistantMessage);
 }
 
@@ -1193,42 +862,25 @@ function updateUserMessageText(message, nextText) {
     : [{ text: nextText }];
 }
 
-function updateMemoryBadge() {
-  const turnCount = Math.ceil(state.messages.filter(isChatMessage).length / 2);
-  memoryBadge.textContent = `Memory ${turnCount} turns`;
+function renderMemoryBadge() {
+  updateMemoryBadge(elements.memoryBadge, state.messages, isChatMessage);
 }
 
-function getRequestMessages(messages, memoryTurns) {
-  const chatMessages = messages.filter(isChatMessage);
-  const selectedMessages = chatMessages.length > SUMMARY_THRESHOLD
-    ? chatMessages
-    : chatMessages.slice(-Math.max(1, Number(memoryTurns) || defaultState.memoryTurns) * 2);
+function syncStateFromControls() {
+  state.model = elements.modelSelect.value;
+  state.customModel = elements.customModelInput.value.trim();
+  state.autoRoute = elements.autoRouteToggle.checked;
+  state.toolsEnabled = elements.toolsToggle.checked;
+  state.systemPrompt = elements.systemPromptInput.value;
+  state.temperature = Number(elements.temperatureInput.value || defaultState.temperature);
+  state.topP = Number(elements.topPInput.value || defaultState.topP);
+  state.maxOutputTokens = Number(elements.maxTokensInput.value || defaultState.maxOutputTokens);
+  state.memoryTurns = Number(elements.memoryTurnsInput.value || defaultState.memoryTurns);
+  persistState();
+}
 
-  return selectedMessages.map((message) => {
-    const payload = {
-      role: message.role,
-      content: message.content
-    };
-
-    if (Array.isArray(message.parts) && message.parts.length > 0) {
-      payload.parts = message.parts.map((part) => {
-        if (part?.inline_data) {
-          return {
-            inline_data: {
-              mime_type: part.inline_data.mime_type,
-              data: part.inline_data.data
-            }
-          };
-        }
-
-        return {
-          text: part?.text || ""
-        };
-      });
-    }
-
-    return payload;
-  });
+function persistState() {
+  state = persistChatState(activeChatId, state);
 }
 
 function buildSystemPrompt(basePrompt, entries) {
@@ -1270,193 +922,6 @@ function buildPersistentMemoryBlock(entries) {
   return lines.join("\n");
 }
 
-function syncStateFromControls() {
-  state.model = modelSelect.value;
-  state.customModel = customModelInput.value.trim();
-  state.autoRoute = autoRouteToggle.checked;
-  state.toolsEnabled = toolsToggle.checked;
-  state.systemPrompt = systemPromptInput.value;
-  state.temperature = Number(temperatureInput.value || defaultState.temperature);
-  state.topP = Number(topPInput.value || defaultState.topP);
-  state.maxOutputTokens = Number(maxTokensInput.value || defaultState.maxOutputTokens);
-  state.memoryTurns = Number(memoryTurnsInput.value || defaultState.memoryTurns);
-  persistState();
-}
-
-function persistState() {
-  state.updatedAt = new Date().toISOString();
-  if (!state.createdAt) {
-    state.createdAt = state.updatedAt;
-  }
-
-  localStorage.setItem(activeChatId, JSON.stringify(serializeState()));
-  localStorage.setItem(ACTIVE_CHAT_KEY, activeChatId);
-}
-
-function serializeState() {
-  return {
-    ...state,
-    messages: state.messages.map((message) => {
-      const serialized = {
-        role: message.role,
-        content: message.content
-      };
-
-      if (message.toolName) {
-        serialized.toolName = message.toolName;
-      }
-
-      if (message.toolState) {
-        serialized.toolState = message.toolState;
-      }
-
-      if (Array.isArray(message.parts)) {
-        const parts = [];
-
-        message.parts.forEach((part) => {
-          if (typeof part?.text === "string" && part.text.trim()) {
-            parts.push({ text: part.text });
-          }
-        });
-
-        if (parts.length > 0) {
-          serialized.parts = parts;
-        }
-      }
-
-      return serialized;
-    })
-  };
-}
-
-function initializeActiveChatId() {
-  migrateLegacyStateIfNeeded();
-
-  let chatId = localStorage.getItem(ACTIVE_CHAT_KEY);
-  if (chatId && localStorage.getItem(chatId)) {
-    return chatId;
-  }
-
-  const sessions = listStoredChats();
-  if (sessions.length > 0) {
-    localStorage.setItem(ACTIVE_CHAT_KEY, sessions[0].id);
-    return sessions[0].id;
-  }
-
-  chatId = createChatId();
-  localStorage.setItem(chatId, JSON.stringify(createDefaultState()));
-  localStorage.setItem(ACTIVE_CHAT_KEY, chatId);
-  return chatId;
-}
-
-function migrateLegacyStateIfNeeded() {
-  const hasChatSessions = Object.keys(localStorage).some((key) => key.startsWith(CHAT_KEY_PREFIX));
-  if (hasChatSessions) {
-    return;
-  }
-
-  const legacyRaw = localStorage.getItem(LEGACY_STORAGE_KEY);
-  if (!legacyRaw) {
-    return;
-  }
-
-  try {
-    const legacyState = {
-      ...createDefaultState(),
-      ...JSON.parse(legacyRaw)
-    };
-
-    const chatId = createChatId();
-    localStorage.setItem(chatId, JSON.stringify(legacyState));
-    localStorage.setItem(ACTIVE_CHAT_KEY, chatId);
-  } catch {
-    const chatId = createChatId();
-    localStorage.setItem(chatId, JSON.stringify(createDefaultState()));
-    localStorage.setItem(ACTIVE_CHAT_KEY, chatId);
-  }
-}
-
-function loadChatState(chatId) {
-  try {
-    const raw = localStorage.getItem(chatId);
-    if (!raw) {
-      return createDefaultState();
-    }
-
-    const parsed = JSON.parse(raw);
-    return {
-      ...createDefaultState(),
-      ...parsed,
-      messages: Array.isArray(parsed?.messages) ? parsed.messages : []
-    };
-  } catch {
-    return createDefaultState();
-  }
-}
-
-function createDefaultState() {
-  const now = new Date().toISOString();
-  return {
-    ...structuredClone(defaultState),
-    createdAt: now,
-    updatedAt: now
-  };
-}
-
-function createChatId() {
-  return `${CHAT_KEY_PREFIX}${Date.now()}`;
-}
-
-function listStoredChats() {
-  return Object.keys(localStorage)
-    .filter((key) => key.startsWith(CHAT_KEY_PREFIX))
-    .map((key) => {
-      const chatState = loadChatState(key);
-      return {
-        id: key,
-        title: buildChatTitle(chatState),
-        updatedAt: chatState.updatedAt || chatState.createdAt || ""
-      };
-    })
-    .sort((left, right) => Date.parse(right.updatedAt || 0) - Date.parse(left.updatedAt || 0));
-}
-
-function buildChatTitle(chatState) {
-  const firstUserMessage = (chatState.messages || []).find((message) => message.role === "user" && typeof message.content === "string" && message.content.trim());
-  if (!firstUserMessage) {
-    return "New Chat";
-  }
-
-  const text = firstUserMessage.content.trim();
-  return text.length > 30 ? `${text.slice(0, 30)}...` : text;
-}
-
-function showRuntimeNotice(message) {
-  runtimeNotice.hidden = false;
-  runtimeNotice.textContent = message;
-}
-
-function hideRuntimeNotice() {
-  runtimeNotice.hidden = true;
-  runtimeNotice.textContent = "";
-}
-
-function formatMemoryMeta(entry) {
-  const parts = [];
-
-  if (entry.sourceMessageCount > 0) {
-    parts.push(`From ${entry.sourceMessageCount} messages`);
-  } else {
-    parts.push("Manual");
-  }
-
-  if (entry.updatedAt) {
-    parts.push(new Date(entry.updatedAt).toLocaleString());
-  }
-
-  return parts.join(" • ");
-}
-
 function readFileAsDataUrl(file) {
   return new Promise((resolve, reject) => {
     const reader = new FileReader();
@@ -1471,22 +936,6 @@ function extractMimeTypeFromDataUrl(dataUrl) {
   return match?.[1] || "";
 }
 
-function isChatMessage(message) {
-  return message?.role === "user" || message?.role === "assistant";
-}
-
-function formatToolInvocation(name, args) {
-  return `${name || "tool"}(${JSON.stringify(args || {})})`;
-}
-
-function formatToolResult(result) {
-  if (typeof result === "string") {
-    return result;
-  }
-
-  return JSON.stringify(result);
-}
-
 function formatExportRole(role) {
   if (role === "user") {
     return "User";
@@ -1497,12 +946,4 @@ function formatExportRole(role) {
   }
 
   return "Tool";
-}
-
-async function safeParseJson(response) {
-  try {
-    return await response.json();
-  } catch {
-    return null;
-  }
 }
