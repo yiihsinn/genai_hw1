@@ -109,15 +109,26 @@
           <div class="header-badge" id="memoryBadge">Memory 0 turns</div>
         </header>
 
+        <div id="runtimeNotice" class="runtime-notice" hidden></div>
         <section id="messageList" class="message-list"></section>
 
         <form id="composerForm" class="composer">
-          <textarea
-            id="userInput"
-            rows="3"
-            placeholder="Type a message and press Send."
-            required
-          ></textarea>
+          <div class="composer-main">
+            <div id="pendingImageContainer" class="pending-image-container" hidden></div>
+
+            <div class="composer-input-shell">
+              <button id="attachImageButton" type="button" class="secondary-button attach-button" aria-label="Attach image">
+                📎
+              </button>
+              <input id="imageInput" type="file" accept="image/*" hidden />
+              <textarea
+                id="userInput"
+                rows="3"
+                placeholder="Type a message and press Send."
+                required
+              ></textarea>
+            </div>
+          </div>
           <div class="composer-actions">
             <button id="stopButton" type="button" class="secondary-button" disabled>Stop</button>
             <button id="sendButton" type="submit" class="primary-button">Send</button>

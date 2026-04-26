@@ -1,5 +1,6 @@
 const STORAGE_KEY = "my-own-chatgpt-state-v1";
 const SUMMARY_THRESHOLD = 20;
+const IMAGE_BASE64_LIMIT = 13_000_000;
 
 const defaultState = {
   model: "gemini-2.5-flash",
@@ -14,6 +15,8 @@ const defaultState = {
 
 const state = loadState();
 
+const chatPanel = document.querySelector(".chat-panel");
+const runtimeNotice = document.querySelector("#runtimeNotice");
 const modelSelect = document.querySelector("#modelSelect");
 const customModelInput = document.querySelector("#customModelInput");
 const systemPromptInput = document.querySelector("#systemPromptInput");
@@ -35,11 +38,16 @@ const memoryInput = document.querySelector("#memoryInput");
 const addMemoryButton = document.querySelector("#addMemoryButton");
 const memoryList = document.querySelector("#memoryList");
 const memoryCountBadge = document.querySelector("#memoryCountBadge");
+const attachImageButton = document.querySelector("#attachImageButton");
+const imageInput = document.querySelector("#imageInput");
+const pendingImageContainer = document.querySelector("#pendingImageContainer");
 
 let abortController = null;
 let serverModels = [];
 let lastFinishReason = "";
 let memoryEntries = [];
+let pendingImage = null;
+let dragDepth = 0;
 
 boot();
 
@@ -48,6 +56,7 @@ async function boot() {
   syncControlsFromState();
   renderMessages();
   renderMemoryEntries();
+  renderPendingImage();
 
   await Promise.all([
     loadHealth(),
@@ -61,6 +70,8 @@ function bindEvents() {
   clearChatButton.addEventListener("click", clearChat);
   savePresetButton.addEventListener("click", saveSettingsOnly);
   addMemoryButton.addEventListener("click", handleAddMemory);
+  attachImageButton.addEventListener("click", () => imageInput.click());
+  imageInput.addEventListener("change", handleImageInputChange);
 
   memoryInput.addEventListener("keydown", (event) => {
     if (event.key === "Enter") {
@@ -104,6 +115,60 @@ function bindEvents() {
     updateMemoryBadge();
     persistState();
   });
+
+  bindDragAndDrop();
+}
+
+function bindDragAndDrop() {
+  const hasFileTransfer = (event) => {
+    return Array.from(event.dataTransfer?.types || []).includes("Files");
+  };
+
+  const handleDragEnter = (event) => {
+    if (!hasFileTransfer(event)) {
+      return;
+    }
+
+    dragDepth += 1;
+    event.preventDefault();
+    chatPanel.classList.add("drag-active");
+  };
+
+  const handleDragLeave = (event) => {
+    if (!hasFileTransfer(event)) {
+      return;
+    }
+
+    dragDepth = Math.max(0, dragDepth - 1);
+    if (dragDepth === 0) {
+      chatPanel.classList.remove("drag-active");
+    }
+  };
+
+  const handleDragOver = (event) => {
+    if (!hasFileTransfer(event)) {
+      return;
+    }
+
+    event.preventDefault();
+    event.dataTransfer.dropEffect = "copy";
+  };
+
+  const handleDrop = async (event) => {
+    if (!event.dataTransfer?.files?.length) {
+      return;
+    }
+
+    event.preventDefault();
+    dragDepth = 0;
+    chatPanel.classList.remove("drag-active");
+    await useSelectedImageFile(event.dataTransfer.files[0]);
+  };
+
+  chatPanel.addEventListener("dragenter", handleDragEnter);
+  chatPanel.addEventListener("dragleave", handleDragLeave);
+  chatPanel.addEventListener("dragover", handleDragOver);
+  chatPanel.addEventListener("drop", handleDrop);
 }
 
 async function loadHealth() {
@@ -162,6 +227,7 @@ function syncControlsFromState() {
 function setComposerEnabled(enabled) {
   userInput.disabled = !enabled;
   sendButton.disabled = !enabled;
+  attachImageButton.disabled = !enabled;
 }
 
 function saveSettingsOnly() {
@@ -173,6 +239,7 @@ function saveSettingsOnly() {
 function clearChat() {
   stopStreaming();
   state.messages = [];
+  clearPendingImage();
   persistState();
   renderMessages();
   statusText.textContent = "Chat history cleared.";
@@ -293,6 +360,95 @@ function renderMemoryEntries() {
   });
 }
 
+async function handleImageInputChange(event) {
+  const file = event.target.files?.[0];
+  if (!file) {
+    return;
+  }
+
+  await useSelectedImageFile(file);
+}
+
+async function useSelectedImageFile(file) {
+  if (!file.type.startsWith("image/")) {
+    statusText.textContent = "Only image files are supported.";
+    return;
+  }
+
+  try {
+    const dataUrl = await readFileAsDataUrl(file);
+    const commaIndex = dataUrl.indexOf(",");
+    const base64Data = commaIndex >= 0 ? dataUrl.slice(commaIndex + 1) : "";
+    const mimeType = file.type || extractMimeTypeFromDataUrl(dataUrl) || "image/jpeg";
+
+    if (!base64Data) {
+      throw new Error("Failed to read image data.");
+    }
+
+    if (base64Data.length > IMAGE_BASE64_LIMIT) {
+      throw new Error("Image is larger than the 10MB inline upload limit.");
+    }
+
+    pendingImage = {
+      name: file.name,
+      mimeType,
+      base64Data,
+      dataUrl
+    };
+
+    renderPendingImage();
+    statusText.textContent = "Image attached. Add a prompt and send it with the message.";
+  } catch (error) {
+    clearPendingImage();
+    statusText.textContent = error.message || "Failed to load image.";
+  }
+}
+
+function renderPendingImage() {
+  pendingImageContainer.innerHTML = "";
+
+  if (!pendingImage) {
+    pendingImageContainer.hidden = true;
+    return;
+  }
+
+  pendingImageContainer.hidden = false;
+
+  const card = document.createElement("div");
+  card.className = "pending-image-card";
+
+  const preview = document.createElement("img");
+  preview.src = pendingImage.dataUrl;
+  preview.alt = pendingImage.name || "Pending image preview";
+
+  const copy = document.createElement("div");
+  copy.className = "pending-image-copy";
+
+  const title = document.createElement("p");
+  title.className = "pending-image-title";
+  title.textContent = pendingImage.name || "Attached image";
+
+  const meta = document.createElement("p");
+  meta.className = "pending-image-meta";
+  meta.textContent = `${pendingImage.mimeType} • ${Math.round(pendingImage.base64Data.length / 1024)} KB base64`;
+
+  const removeButton = document.createElement("button");
+  removeButton.className = "remove-image-button";
+  removeButton.type = "button";
+  removeButton.textContent = "✕";
+  removeButton.addEventListener("click", clearPendingImage);
+
+  copy.append(title, meta);
+  card.append(preview, copy, removeButton);
+  pendingImageContainer.appendChild(card);
+}
+
+function clearPendingImage() {
+  pendingImage = null;
+  imageInput.value = "";
+  renderPendingImage();
+}
+
 async function handleSubmit(event) {
   event.preventDefault();
   if (abortController) {
@@ -306,12 +462,15 @@ async function handleSubmit(event) {
 
   syncStateFromControls();
   await refreshMemoryEntries({ silent: true });
+  hideRuntimeNotice();
 
   const selectedModel = state.customModel || state.model;
-  const userMessage = { role: "user", content: prompt };
+  const imageForMessage = pendingImage ? { ...pendingImage } : null;
+  const userMessage = createUserMessage(prompt, imageForMessage);
   const assistantMessage = { role: "assistant", content: "" };
 
   state.messages.push(userMessage, assistantMessage);
+  clearPendingImage();
   persistState();
   renderMessages({ streamingIndex: state.messages.length - 1 });
 
@@ -373,6 +532,30 @@ async function handleSubmit(event) {
   }
 }
 
+function createUserMessage(prompt, image) {
+  const message = {
+    role: "user",
+    content: prompt
+  };
+
+  if (image) {
+    message.parts = [
+      { text: prompt },
+      {
+        inline_data: {
+          mime_type: image.mimeType,
+          data: image.base64Data
+        }
+      }
+    ];
+    message.imagePreviewUrl = image.dataUrl;
+    message.imageName = image.name;
+    message.imageMimeType = image.mimeType;
+  }
+
+  return message;
+}
+
 async function consumeEventStream(response, assistantMessage) {
   const reader = response.body.getReader();
   const decoder = new TextDecoder();
@@ -398,6 +581,11 @@ async function consumeEventStream(response, assistantMessage) {
 
       if (parsedEvent.event === "memory_summary") {
         handleMemorySummaryEvent(parsedEvent.data);
+        continue;
+      }
+
+      if (parsedEvent.event === "model_override") {
+        handleModelOverrideEvent(parsedEvent.data);
         continue;
       }
 
@@ -432,6 +620,14 @@ function handleMemorySummaryEvent(data) {
 
   refreshMemoryEntries({ silent: true });
   statusText.textContent = "Older messages were summarized into persistent memory.";
+}
+
+function handleModelOverrideEvent(data) {
+  if (!data?.model) {
+    return;
+  }
+
+  showRuntimeNotice(`Using ${data.model} because ${data.reason || "an image was attached"}.`);
 }
 
 function parseSse(rawEvent) {
@@ -471,6 +667,7 @@ function setStreamingUi(active) {
   stopButton.disabled = !active;
   sendButton.disabled = active;
   userInput.disabled = active;
+  attachImageButton.disabled = active;
 }
 
 function renderMessages(options = {}) {
@@ -497,12 +694,31 @@ function renderMessages(options = {}) {
     }
 
     roleTag.textContent = message.role === "user" ? "You" : "Assistant";
-    body.textContent = message.content;
+    renderMessageBody(body, message);
     messageList.appendChild(node);
   });
 
   updateMemoryBadge();
   messageList.scrollTop = messageList.scrollHeight;
+}
+
+function renderMessageBody(body, message) {
+  body.innerHTML = "";
+
+  if (message.imagePreviewUrl) {
+    const image = document.createElement("img");
+    image.className = "message-image";
+    image.src = message.imagePreviewUrl;
+    image.alt = message.imageName || "Uploaded image";
+    body.appendChild(image);
+  }
+
+  if (message.content) {
+    const text = document.createElement("div");
+    text.className = "message-text";
+    text.textContent = message.content;
+    body.appendChild(text);
+  }
 }
 
 function updateMemoryBadge() {
@@ -511,12 +727,35 @@ function updateMemoryBadge() {
 }
 
 function getRequestMessages(messages, memoryTurns) {
-  if (messages.length > SUMMARY_THRESHOLD) {
-    return messages;
-  }
+  const selectedMessages = messages.length > SUMMARY_THRESHOLD
+    ? messages
+    : messages.slice(-Math.max(1, Number(memoryTurns) || defaultState.memoryTurns) * 2);
 
-  const limit = Math.max(1, Number(memoryTurns) || defaultState.memoryTurns) * 2;
-  return messages.slice(-limit);
+  return selectedMessages.map((message) => {
+    const payload = {
+      role: message.role,
+      content: message.content
+    };
+
+    if (Array.isArray(message.parts) && message.parts.length > 0) {
+      payload.parts = message.parts.map((part) => {
+        if (part?.inline_data) {
+          return {
+            inline_data: {
+              mime_type: part.inline_data.mime_type,
+              data: part.inline_data.data
+            }
+          };
+        }
+
+        return {
+          text: part?.text || ""
+        };
+      });
+    }
+
+    return payload;
+  });
 }
 
 function buildSystemPrompt(basePrompt, entries) {
@@ -570,7 +809,31 @@ function syncStateFromControls() {
 }
 
 function persistState() {
-  localStorage.setItem(STORAGE_KEY, JSON.stringify(state));
+  localStorage.setItem(STORAGE_KEY, JSON.stringify(serializeState()));
+}
+
+function serializeState() {
+  return {
+    ...state,
+    messages: state.messages.map((message) => {
+      const serialized = {
+        role: message.role,
+        content: message.content
+      };
+
+      if (Array.isArray(message.parts)) {
+        const textParts = message.parts
+          .filter((part) => typeof part?.text === "string" && part.text.trim())
+          .map((part) => ({ text: part.text }));
+
+        if (textParts.length > 0) {
+          serialized.parts = textParts;
+        }
+      }
+
+      return serialized;
+    })
+  };
 }
 
 function loadState() {
@@ -589,6 +852,16 @@ function loadState() {
   }
 }
 
+function showRuntimeNotice(message) {
+  runtimeNotice.hidden = false;
+  runtimeNotice.textContent = message;
+}
+
+function hideRuntimeNotice() {
+  runtimeNotice.hidden = true;
+  runtimeNotice.textContent = "";
+}
+
 function formatMemoryMeta(entry) {
   const parts = [];
 
@@ -603,6 +876,20 @@ function formatMemoryMeta(entry) {
   }
 
   return parts.join(" • ");
+}
+
+function readFileAsDataUrl(file) {
+  return new Promise((resolve, reject) => {
+    const reader = new FileReader();
+    reader.onload = () => resolve(String(reader.result || ""));
+    reader.onerror = () => reject(new Error("Failed to read image file."));
+    reader.readAsDataURL(file);
+  });
+}
+
+function extractMimeTypeFromDataUrl(dataUrl) {
+  const match = /^data:([^;,]+)[;,]/.exec(dataUrl);
+  return match?.[1] || "";
 }
 
 async function safeParseJson(response) {

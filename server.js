@@ -13,6 +13,9 @@ const MEMORY_LOCK_FILE = `${MEMORY_FILE}.lock`;
 const GEMINI_API_BASE = "https://generativelanguage.googleapis.com/v1beta";
 const SUMMARY_THRESHOLD = 20;
 const SUMMARY_BATCH_SIZE = 10;
+const MAX_REQUEST_BODY_SIZE = 16_000_000;
+const INLINE_DATA_LIMIT = 13_000_000;
+const VISION_MODEL = "gemini-3-flash-preview";
 
 const MODEL_OPTIONS = [
   "gemini-2.5-flash",
@@ -86,7 +89,7 @@ async function handleUpsertMemory(req, res) {
   try {
     body = await readJsonBody(req);
   } catch (error) {
-    return sendJson(res, 400, { error: error.message });
+    return sendJson(res, error.statusCode || 400, { error: error.message });
   }
 
   const entry = addMemory({
@@ -127,7 +130,7 @@ async function handleChat(req, res) {
   try {
     body = await readJsonBody(req);
   } catch (error) {
-    return sendJson(res, 400, { error: error.message });
+    return sendJson(res, error.statusCode || 400, { error: error.message });
   }
 
   const {
@@ -143,14 +146,33 @@ async function handleChat(req, res) {
     return sendJson(res, 400, { error: "Invalid request payload." });
   }
 
+  let workingMessages = sanitizeMessages(messages);
+  if (workingMessages.length === 0) {
+    return sendJson(res, 400, { error: "No valid messages were provided." });
+  }
+
+  const inlineDataParts = getInlineDataParts(workingMessages);
+  if (inlineDataParts.some((part) => part.inline_data.data.length > INLINE_DATA_LIMIT)) {
+    return sendJson(res, 413, {
+      error: "Inline image data exceeds the 10MB upload limit."
+    });
+  }
+
+  const selectedModel = inlineDataParts.length > 0 ? VISION_MODEL : model;
+  const modelOverridePayload = inlineDataParts.length > 0
+    ? {
+      model: selectedModel,
+      reason: "image detected: cost optimization"
+    }
+    : null;
+
   const controller = new AbortController();
   req.on("close", () => controller.abort());
 
-  let workingMessages = sanitizeMessages(messages);
   let pendingSummary = null;
 
   if (workingMessages.length > SUMMARY_THRESHOLD) {
-    pendingSummary = await summarizeOldMessages(model, workingMessages, controller.signal);
+    pendingSummary = await summarizeOldMessages(selectedModel, workingMessages, controller.signal);
     if (pendingSummary?.summary) {
       workingMessages = [
         {
@@ -165,10 +187,6 @@ async function handleChat(req, res) {
   const contents = workingMessages
     .map(convertMessageToGeminiContent)
     .filter(Boolean);
-
-  if (contents.length === 0) {
-    return sendJson(res, 400, { error: "No valid messages were provided." });
-  }
 
   const payload = {
     contents,
@@ -188,7 +206,7 @@ async function handleChat(req, res) {
   let upstream;
 
   try {
-    upstream = await fetch(buildGeminiUrl(model, true), {
+    upstream = await fetch(buildGeminiUrl(selectedModel, true), {
       method: "POST",
       headers: {
         "Content-Type": "application/json"
@@ -215,6 +233,10 @@ async function handleChat(req, res) {
     "Cache-Control": "no-cache, no-transform",
     Connection: "keep-alive"
   });
+
+  if (modelOverridePayload) {
+    writeSse(res, "model_override", modelOverridePayload);
+  }
 
   if (pendingSummary?.summary) {
     try {
@@ -326,17 +348,15 @@ function sanitizeMessages(messages) {
       continue;
     }
 
-    const content = typeof message.content === "string"
-      ? message.content.trim()
-      : "";
-
-    if (!content) {
+    const parts = normalizeMessageParts(message);
+    if (parts.length === 0) {
       continue;
     }
 
     sanitized.push({
       role: message.role,
-      content
+      content: extractTextFromParts(parts),
+      parts
     });
   }
 
@@ -348,14 +368,17 @@ function convertMessageToGeminiContent(message) {
     return null;
   }
 
-  const text = typeof message.content === "string" ? message.content.trim() : "";
-  if (!text) {
+  const parts = Array.isArray(message.parts)
+    ? message.parts.map(cloneGeminiPart).filter(Boolean)
+    : [];
+
+  if (parts.length === 0) {
     return null;
   }
 
   return {
     role: message.role === "assistant" ? "model" : "user",
-    parts: [{ text }]
+    parts
   };
 }
 
@@ -363,10 +386,76 @@ function buildConversationTranscript(messages) {
   return messages
     .map((message) => {
       const speaker = message.role === "assistant" ? "Assistant" : "User";
-      return `${speaker}: ${message.content}`;
+      const content = message.content || "[Image attached]";
+      return `${speaker}: ${content}`;
     })
     .join("\n\n")
     .trim();
+}
+
+function normalizeMessageParts(message) {
+  if (Array.isArray(message?.parts) && message.parts.length > 0) {
+    const normalizedParts = [];
+
+    for (const part of message.parts) {
+      if (typeof part?.text === "string" && part.text.trim()) {
+        normalizedParts.push({ text: part.text.trim() });
+      }
+
+      const inlineData = part?.inline_data;
+      const mimeType = inlineData?.mime_type || inlineData?.mimeType;
+      const data = inlineData?.data;
+
+      if (typeof mimeType === "string" && mimeType.trim() && typeof data === "string" && data.trim()) {
+        normalizedParts.push({
+          inline_data: {
+            mime_type: mimeType.trim(),
+            data: data.trim()
+          }
+        });
+      }
+    }
+
+    if (normalizedParts.length > 0) {
+      return normalizedParts;
+    }
+  }
+
+  const content = typeof message?.content === "string" ? message.content.trim() : "";
+  return content ? [{ text: content }] : [];
+}
+
+function extractTextFromParts(parts) {
+  return parts
+    .map((part) => (typeof part?.text === "string" ? part.text.trim() : ""))
+    .filter(Boolean)
+    .join("\n\n");
+}
+
+function cloneGeminiPart(part) {
+  if (typeof part?.text === "string" && part.text.trim()) {
+    return { text: part.text.trim() };
+  }
+
+  const inlineData = part?.inline_data;
+  if (typeof inlineData?.mime_type === "string" && inlineData.mime_type.trim() && typeof inlineData?.data === "string" && inlineData.data.trim()) {
+    return {
+      inline_data: {
+        mime_type: inlineData.mime_type.trim(),
+        data: inlineData.data.trim()
+      }
+    };
+  }
+
+  return null;
+}
+
+function getInlineDataParts(messages) {
+  return messages.flatMap((message) => {
+    return Array.isArray(message.parts)
+      ? message.parts.filter((part) => part?.inline_data)
+      : [];
+  });
 }
 
 function normalizeSummaryForPrompt(summary) {
@@ -561,8 +650,10 @@ function readJsonBody(req) {
 
     req.on("data", (chunk) => {
       body += chunk;
-      if (body.length > 1_000_000) {
-        reject(new Error("Request body too large."));
+      if (body.length > MAX_REQUEST_BODY_SIZE) {
+        const error = new Error("Request body too large.");
+        error.statusCode = 413;
+        reject(error);
         req.destroy();
       }
     });
