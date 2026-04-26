@@ -16,9 +16,9 @@
     <div class="app-shell">
       <aside class="control-panel">
         <div class="brand-block">
-          <p class="eyebrow">HW01</p>
+          <p class="eyebrow">HW02</p>
           <h1>My Own ChatGPT</h1>
-          <p class="subtitle">Pick a model, tune prompts, stream replies, and keep short-term memory.</p>
+          <p class="subtitle">Pick a model, tune prompts, stream replies, and keep both local chat history and persistent memory.</p>
         </div>
 
         <section class="panel-card">
@@ -71,6 +71,27 @@
         <section class="panel-card actions-card">
           <button id="savePresetButton" class="secondary-button">Save Settings</button>
           <button id="clearChatButton" class="secondary-button">Clear Chat</button>
+        </section>
+
+        <section class="panel-card memory-panel">
+          <div class="section-heading">
+            <div>
+              <p class="eyebrow">Persistent</p>
+              <h3>🧠 Memory</h3>
+            </div>
+            <span id="memoryCountBadge" class="mini-badge">0 entries</span>
+          </div>
+
+          <div class="memory-compose">
+            <input
+              id="memoryInput"
+              type="text"
+              placeholder="Add a long-term fact or preference."
+            />
+            <button id="addMemoryButton" class="secondary-button" type="button">Add</button>
+          </div>
+
+          <div id="memoryList" class="memory-list"></div>
         </section>
 
         <section class="panel-card status-card">

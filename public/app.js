@@ -1,4 +1,5 @@
 const STORAGE_KEY = "my-own-chatgpt-state-v1";
+const SUMMARY_THRESHOLD = 20;
 
 const defaultState = {
   model: "gemini-2.5-flash",
@@ -30,10 +31,15 @@ const userInput = document.querySelector("#userInput");
 const stopButton = document.querySelector("#stopButton");
 const sendButton = document.querySelector("#sendButton");
 const messageTemplate = document.querySelector("#messageTemplate");
+const memoryInput = document.querySelector("#memoryInput");
+const addMemoryButton = document.querySelector("#addMemoryButton");
+const memoryList = document.querySelector("#memoryList");
+const memoryCountBadge = document.querySelector("#memoryCountBadge");
 
 let abortController = null;
 let serverModels = [];
 let lastFinishReason = "";
+let memoryEntries = [];
 
 boot();
 
@@ -41,26 +47,12 @@ async function boot() {
   bindEvents();
   syncControlsFromState();
   renderMessages();
+  renderMemoryEntries();
 
-  try {
-    const response = await fetch("/api/health");
-    const data = await response.json();
-    serverModels = Array.isArray(data.models) ? data.models : [];
-    populateModelOptions(serverModels);
-
-    if (!data.hasApiKey) {
-      statusText.textContent = "GEMINI_API_KEY is missing. Create a .env file first.";
-      setComposerEnabled(false);
-      return;
-    }
-
-    statusText.textContent = "Gemini API is ready. You can start chatting.";
-    setComposerEnabled(true);
-  } catch {
-    statusText.textContent = "Cannot reach the local server. Make sure server.js is running.";
-    populateModelOptions(serverModels);
-    setComposerEnabled(false);
-  }
+  await Promise.all([
+    loadHealth(),
+    refreshMemoryEntries({ silent: true })
+  ]);
 }
 
 function bindEvents() {
@@ -68,6 +60,14 @@ function bindEvents() {
   stopButton.addEventListener("click", stopStreaming);
   clearChatButton.addEventListener("click", clearChat);
   savePresetButton.addEventListener("click", saveSettingsOnly);
+  addMemoryButton.addEventListener("click", handleAddMemory);
+
+  memoryInput.addEventListener("keydown", (event) => {
+    if (event.key === "Enter") {
+      event.preventDefault();
+      handleAddMemory();
+    }
+  });
 
   modelSelect.addEventListener("change", () => {
     state.model = modelSelect.value;
@@ -104,6 +104,28 @@ function bindEvents() {
     updateMemoryBadge();
     persistState();
   });
+}
+
+async function loadHealth() {
+  try {
+    const response = await fetch("/api/health");
+    const data = await response.json();
+    serverModels = Array.isArray(data.models) ? data.models : [];
+    populateModelOptions(serverModels);
+
+    if (!data.hasApiKey) {
+      statusText.textContent = "GEMINI_API_KEY is missing. Create a .env file first.";
+      setComposerEnabled(false);
+      return;
+    }
+
+    statusText.textContent = "Gemini API is ready. Persistent memory is available.";
+    setComposerEnabled(true);
+  } catch {
+    statusText.textContent = "Cannot reach the local server. Make sure server.js is running.";
+    populateModelOptions(serverModels);
+    setComposerEnabled(false);
+  }
 }
 
 function populateModelOptions(models) {
@@ -156,6 +178,121 @@ function clearChat() {
   statusText.textContent = "Chat history cleared.";
 }
 
+async function handleAddMemory() {
+  const summary = memoryInput.value.trim();
+  if (!summary) {
+    return;
+  }
+
+  addMemoryButton.disabled = true;
+
+  try {
+    const response = await fetch("/api/memory", {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json"
+      },
+      body: JSON.stringify({
+        summary,
+        sourceMessageCount: 0
+      })
+    });
+
+    if (!response.ok) {
+      const error = await safeParseJson(response);
+      throw new Error(error?.error || "Failed to save memory.");
+    }
+
+    memoryInput.value = "";
+    await refreshMemoryEntries({ silent: true });
+    statusText.textContent = "Persistent memory saved.";
+  } catch (error) {
+    statusText.textContent = error.message || "Failed to save memory.";
+  } finally {
+    addMemoryButton.disabled = false;
+  }
+}
+
+async function handleDeleteMemory(id) {
+  try {
+    const response = await fetch(`/api/memory/${encodeURIComponent(id)}`, {
+      method: "DELETE"
+    });
+
+    if (!response.ok) {
+      const error = await safeParseJson(response);
+      throw new Error(error?.error || "Failed to delete memory.");
+    }
+
+    await refreshMemoryEntries({ silent: true });
+    statusText.textContent = "Memory entry deleted.";
+  } catch (error) {
+    statusText.textContent = error.message || "Failed to delete memory.";
+  }
+}
+
+async function refreshMemoryEntries(options = {}) {
+  const { silent = false } = options;
+
+  try {
+    const response = await fetch("/api/memory");
+    if (!response.ok) {
+      throw new Error("Failed to load memory.");
+    }
+
+    const data = await response.json();
+    memoryEntries = Array.isArray(data) ? data : [];
+    renderMemoryEntries();
+  } catch (error) {
+    if (!silent) {
+      statusText.textContent = error.message || "Failed to load memory.";
+    }
+    memoryEntries = [];
+    renderMemoryEntries();
+  }
+}
+
+function renderMemoryEntries() {
+  memoryList.innerHTML = "";
+  memoryCountBadge.textContent = `${memoryEntries.length} entr${memoryEntries.length === 1 ? "y" : "ies"}`;
+
+  if (memoryEntries.length === 0) {
+    const empty = document.createElement("p");
+    empty.className = "memory-empty";
+    empty.textContent = "No persistent memory yet. Save preferences or let auto-summarization collect them after long chats.";
+    memoryList.appendChild(empty);
+    return;
+  }
+
+  memoryEntries.forEach((entry) => {
+    const card = document.createElement("article");
+    card.className = "memory-card";
+
+    const summary = document.createElement("p");
+    summary.className = "memory-summary";
+    summary.textContent = entry.summary;
+
+    const footer = document.createElement("div");
+    footer.className = "memory-footer";
+
+    const meta = document.createElement("p");
+    meta.className = "memory-meta";
+    meta.textContent = formatMemoryMeta(entry);
+
+    const button = document.createElement("button");
+    button.className = "danger-button";
+    button.type = "button";
+    button.textContent = "Delete";
+    button.addEventListener("click", () => {
+      handleDeleteMemory(entry.id);
+    });
+
+    footer.append(meta, button);
+    card.append(summary, footer);
+    memoryList.appendChild(card);
+  });
+}
+
 async function handleSubmit(event) {
   event.preventDefault();
   if (abortController) {
@@ -168,6 +305,7 @@ async function handleSubmit(event) {
   }
 
   syncStateFromControls();
+  await refreshMemoryEntries({ silent: true });
 
   const selectedModel = state.customModel || state.model;
   const userMessage = { role: "user", content: prompt };
@@ -193,11 +331,11 @@ async function handleSubmit(event) {
       },
       body: JSON.stringify({
         model: selectedModel,
-        systemPrompt: state.systemPrompt,
+        systemPrompt: buildSystemPrompt(state.systemPrompt, memoryEntries),
         temperature: state.temperature,
         topP: state.topP,
         maxOutputTokens: state.maxOutputTokens,
-        messages: getMemoryWindowMessages(state.messages, state.memoryTurns)
+        messages: getRequestMessages(state.messages, state.memoryTurns)
       }),
       signal: abortController.signal
     });
@@ -258,6 +396,11 @@ async function consumeEventStream(response, assistantMessage) {
         continue;
       }
 
+      if (parsedEvent.event === "memory_summary") {
+        handleMemorySummaryEvent(parsedEvent.data);
+        continue;
+      }
+
       if (parsedEvent.event === "token" && parsedEvent.data?.delta) {
         assistantMessage.content += parsedEvent.data.delta;
         persistState();
@@ -277,6 +420,18 @@ async function consumeEventStream(response, assistantMessage) {
       }
     }
   }
+}
+
+function handleMemorySummaryEvent(data) {
+  const removedCount = Number(data?.sourceMessageCount || 0);
+  if (removedCount > 0) {
+    state.messages.splice(0, removedCount);
+    persistState();
+    renderMessages({ streamingIndex: state.messages.length - 1 });
+  }
+
+  refreshMemoryEntries({ silent: true });
+  statusText.textContent = "Older messages were summarized into persistent memory.";
 }
 
 function parseSse(rawEvent) {
@@ -355,9 +510,52 @@ function updateMemoryBadge() {
   memoryBadge.textContent = `Memory ${turnCount} turns`;
 }
 
-function getMemoryWindowMessages(messages, memoryTurns) {
+function getRequestMessages(messages, memoryTurns) {
+  if (messages.length > SUMMARY_THRESHOLD) {
+    return messages;
+  }
+
   const limit = Math.max(1, Number(memoryTurns) || defaultState.memoryTurns) * 2;
   return messages.slice(-limit);
+}
+
+function buildSystemPrompt(basePrompt, entries) {
+  const blocks = [];
+  const trimmedBasePrompt = typeof basePrompt === "string" ? basePrompt.trim() : "";
+  const persistentMemoryBlock = buildPersistentMemoryBlock(entries);
+
+  if (trimmedBasePrompt) {
+    blocks.push(trimmedBasePrompt);
+  }
+
+  if (persistentMemoryBlock) {
+    blocks.push(`[Persistent Memory]\n${persistentMemoryBlock}`);
+  }
+
+  return blocks.join("\n\n");
+}
+
+function buildPersistentMemoryBlock(entries) {
+  const lines = [];
+
+  entries.forEach((entry) => {
+    const summaryLines = String(entry.summary || "")
+      .split(/\r?\n/)
+      .map((line) => line.trim())
+      .filter(Boolean);
+
+    summaryLines.forEach((line) => {
+      if (line.startsWith("-")) {
+        lines.push(line);
+      } else if (line.startsWith("*")) {
+        lines.push(`-${line.slice(1)}`);
+      } else {
+        lines.push(`- ${line}`);
+      }
+    });
+  });
+
+  return lines.join("\n");
 }
 
 function syncStateFromControls() {
@@ -389,6 +587,22 @@ function loadState() {
   } catch {
     return structuredClone(defaultState);
   }
+}
+
+function formatMemoryMeta(entry) {
+  const parts = [];
+
+  if (entry.sourceMessageCount > 0) {
+    parts.push(`From ${entry.sourceMessageCount} messages`);
+  } else {
+    parts.push("Manual");
+  }
+
+  if (entry.updatedAt) {
+    parts.push(new Date(entry.updatedAt).toLocaleString());
+  }
+
+  return parts.join(" • ");
 }
 
 async function safeParseJson(response) {
