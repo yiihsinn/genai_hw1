@@ -3,7 +3,7 @@ export function createToolCallMessage(data) {
     role: "tool",
     toolName: data?.name || "tool",
     toolState: "calling",
-    content: `⚙️ Calling tool: ${formatToolInvocation(data?.name, data?.args)}`
+    content: `Calling tool: ${formatToolInvocation(data?.name, data?.args)}`
   };
 }
 
@@ -15,7 +15,7 @@ export function applyToolResult(messages, data) {
 
   if (existing) {
     existing.toolState = "done";
-    existing.content = `✅ ${data?.name || "tool"} → ${resultText}`;
+    existing.content = `${data?.name || "tool"} -> ${resultText}`;
     return true;
   }
 
@@ -27,7 +27,7 @@ export function createCompletedToolMessage(data) {
     role: "tool",
     toolName: data?.name || "tool",
     toolState: "done",
-    content: `✅ ${data?.name || "tool"} → ${formatToolResult(data?.result)}`
+    content: `${data?.name || "tool"} -> ${formatToolResult(data?.result)}`
   };
 }
 

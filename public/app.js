@@ -7,7 +7,9 @@ import {
   listStoredChats,
   isChatMessage,
   getRequestMessages,
-  defaultState
+  defaultState,
+  getMessageText,
+  messageHasImage
 } from "./modules/state.js";
 import {
   getHealth,
@@ -185,6 +187,12 @@ function bindEvents() {
   bindDragAndDrop();
 }
 
+function stopStreaming() {
+  if (abortController) {
+    abortController.abort();
+  }
+}
+
 function bindDragAndDrop() {
   const hasFileTransfer = (event) => {
     return Array.from(event.dataTransfer?.types || []).includes("Files");
@@ -300,12 +308,12 @@ async function loadHealthStatus() {
     populateModelOptions(elements.modelSelect, serverModels, defaultState.model, state.model);
 
     if (!data.hasApiKey) {
-      elements.statusText.textContent = "GEMINI_API_KEY is missing. Create a .env file first.";
+      elements.statusText.textContent = "NIM_API_KEY is missing. Add it to .env before sending requests.";
       setComposerEnabled(elements, false, Boolean(speechRecognition));
       return;
     }
 
-    elements.statusText.textContent = `Gemini API is ready. Memory entries: ${data.memoryCount}. Tools: ${data.tools?.names?.join(", ") || "none"}.`;
+    elements.statusText.textContent = `NVIDIA NIM is ready. Memory entries: ${data.memoryCount}. Tools: ${data.tools?.names?.join(", ") || "none"}.`;
     setComposerEnabled(elements, true, Boolean(speechRecognition));
   } catch {
     elements.statusText.textContent = "Cannot reach the local server. Make sure server.js is running.";
@@ -439,7 +447,7 @@ function exportCurrentChatAsJson() {
 function exportCurrentChatAsMarkdown() {
   closeExportMenu();
   const markdown = state.messages
-    .map((message) => `## ${formatExportRole(message.role)}\n${message.content || ""}`.trim())
+    .map((message) => `## ${formatExportRole(message.role)}\n${formatExportMessage(message)}`.trim())
     .join("\n\n");
   downloadTextFile("chat-export.md", `${markdown}\n`, "text/markdown");
 }
@@ -669,7 +677,7 @@ async function requestAssistantReply(assistantMessage) {
       assistantMessage.content = "The model returned no content.";
     }
 
-    elements.statusText.textContent = lastFinishReason === "MAX_TOKENS"
+    elements.statusText.textContent = lastFinishReason === "MAX_TOKENS" || lastFinishReason === "length"
       ? "Reply stopped because max output tokens was reached."
       : "Reply completed.";
   } catch (error) {
@@ -680,7 +688,7 @@ async function requestAssistantReply(assistantMessage) {
       }
     } else {
       assistantMessage.content = assistantMessage.content.trim() || `Error: ${error.message}`;
-      elements.statusText.textContent = "Request failed. Check the API key, model name, or parameters.";
+      elements.statusText.textContent = "Request failed. Check the NVIDIA NIM key, model name, or parameters.";
     }
   } finally {
     abortController = null;
@@ -693,27 +701,31 @@ async function requestAssistantReply(assistantMessage) {
 }
 
 function createUserMessage(prompt, image) {
-  const message = {
+  if (image) {
+    return {
+      role: "user",
+      content: [
+        {
+          type: "text",
+          text: prompt
+        },
+        {
+          type: "image_url",
+          image_url: {
+            url: image.dataUrl
+          }
+        }
+      ],
+      imagePreviewUrl: image.dataUrl,
+      imageName: image.name,
+      imageMimeType: image.mimeType
+    };
+  }
+
+  return {
     role: "user",
     content: prompt
   };
-
-  if (image) {
-    message.parts = [
-      { text: prompt },
-      {
-        inline_data: {
-          mime_type: image.mimeType,
-          data: image.base64Data
-        }
-      }
-    ];
-    message.imagePreviewUrl = image.dataUrl;
-    message.imageName = image.name;
-    message.imageMimeType = image.mimeType;
-  }
-
-  return message;
 }
 
 function handleMemorySummaryEvent(data) {
@@ -850,16 +862,19 @@ async function regenerateFromMessage(index, nextText) {
 }
 
 function updateUserMessageText(message, nextText) {
-  message.content = nextText;
-
-  if (!Array.isArray(message.parts)) {
+  if (!Array.isArray(message.content)) {
+    message.content = nextText;
     return;
   }
 
-  const inlinePart = message.parts.find((part) => part?.inline_data);
-  message.parts = inlinePart
-    ? [{ text: nextText }, inlinePart]
-    : [{ text: nextText }];
+  const preservedItems = message.content.filter((item) => item?.type !== "text");
+  message.content = [
+    {
+      type: "text",
+      text: nextText
+    },
+    ...preservedItems
+  ];
 }
 
 function renderMemoryBadge() {
@@ -867,7 +882,7 @@ function renderMemoryBadge() {
 }
 
 function syncStateFromControls() {
-  state.model = elements.modelSelect.value;
+  state.model = elements.modelSelect.value || defaultState.model;
   state.customModel = elements.customModelInput.value.trim();
   state.autoRoute = elements.autoRouteToggle.checked;
   state.toolsEnabled = elements.toolsToggle.checked;
@@ -946,4 +961,19 @@ function formatExportRole(role) {
   }
 
   return "Tool";
+}
+
+function formatExportMessage(message) {
+  const lines = [];
+  const text = getMessageText(message);
+
+  if (text) {
+    lines.push(text);
+  }
+
+  if (messageHasImage(message)) {
+    lines.push("[Image attached]");
+  }
+
+  return lines.join("\n");
 }

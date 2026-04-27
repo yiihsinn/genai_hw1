@@ -543,6 +543,49 @@ button:disabled {
   color: var(--accent);
 }
 
+.runtime-notice {
+  background: rgba(230, 92, 0, 0.1);
+  color: #d15600;
+  border-left: 4px solid #f26b13;
+  padding: 10px 16px;
+  margin: 12px 24px;
+  border-radius: 4px;
+  font-weight: bold;
+  font-size: 14px;
+  animation: notice-pulse 2s infinite ease-in-out;
+}
+
+@keyframes notice-pulse {
+  0% { box-shadow: 0 0 0 0 rgba(242, 107, 19, 0.4); }
+  70% { box-shadow: 0 0 0 6px rgba(242, 107, 19, 0); }
+  100% { box-shadow: 0 0 0 0 rgba(242, 107, 19, 0); }
+}
+
+.export-shell {
+  position: relative;
+  display: inline-block;
+}
+
+.export-menu {
+  position: absolute;
+  top: calc(100% + 4px);
+  right: 0;
+  background: white;
+  border: 1px solid var(--line);
+  box-shadow: var(--shadow);
+  border-radius: 8px;
+  padding: 8px;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  min-width: 180px;
+  z-index: 100;
+}
+
+.export-menu[hidden] {
+  display: none !important;
+}
+
 .composer {
   display: grid;
   grid-template-columns: minmax(0, 1fr) auto;
@@ -570,10 +613,12 @@ button:disabled {
 }
 
 .attach-button {
-  min-width: 56px;
+  min-width: 74px;
   min-height: 56px;
-  padding: 0;
-  font-size: 22px;
+  padding: 0 14px;
+  font-size: 14px;
+  font-weight: 700;
+  white-space: nowrap;
 }
 
 .pending-image-container {

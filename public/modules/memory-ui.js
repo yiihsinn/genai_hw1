@@ -50,5 +50,5 @@ function formatMemoryMeta(entry) {
     parts.push(new Date(entry.updatedAt).toLocaleString());
   }
 
-  return parts.join(" • ");
+  return parts.join(" | ");
 }

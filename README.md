@@ -1,6 +1,6 @@
 # HW02 - My Own ChatGPT v2
 
-A zero-dependency ChatGPT-style web app built with Node.js built-in modules and vanilla JavaScript. It now supports persistent memory, multimodal image input, automatic model routing, function calling tools, multi-chat session management, export, editing/regeneration, and voice input.
+A zero-dependency ChatGPT-style web app built with Node.js built-in modules and vanilla JavaScript. The app now runs on NVIDIA NIM using its OpenAI-compatible Chat Completions API and includes persistent memory, multimodal image input, auto-routing, tool use, chat export, edit/regenerate, multi-session storage, and voice input.
 
 ## Features
 
@@ -19,7 +19,8 @@ A zero-dependency ChatGPT-style web app built with Node.js built-in modules and 
 
 - Frontend: HTML / CSS / Vanilla JavaScript modules
 - Backend: Node.js built-in `http`, `fs`, `path`, `url`
-- API: Gemini REST API (`generateContent` / `streamGenerateContent`)
+- Provider: NVIDIA NIM `https://integrate.api.nvidia.com/v1`
+- API format: OpenAI-compatible Chat Completions with SSE streaming
 
 No extra npm packages are required.
 
@@ -31,12 +32,14 @@ No extra npm packages are required.
 copy .env.example .env
 ```
 
-2. Add your Gemini API key
+2. Add your NVIDIA NIM API key
 
 ```env
-GEMINI_API_KEY=your_real_key
+NIM_API_KEY=nvapi-your_real_key
 PORT=3000
 ```
+
+The server also accepts `NVIDIA_API_KEY` as a fallback env var.
 
 3. Start the app
 
@@ -83,7 +86,7 @@ http://localhost:3000
 
 `GET /api/health` returns:
 
-- Gemini availability and API key status
+- NVIDIA NIM availability and API key status
 - Available model list
 - Persistent memory entry count
 - Registered tool names
@@ -91,8 +94,9 @@ http://localhost:3000
 ## Notes
 
 - The backend remains zero-dependency.
-- `server.js` only starts the server when run directly; `node -e "require('./server.js')"` now succeeds without hanging.
-- Pro / blocked Gemini models are filtered out to avoid quota failures.
+- `server.js` only starts the server when run directly; `node -e "require('./server.js')"` succeeds without hanging.
+- Image requests are sent as OpenAI-style `content` arrays with `text` and `image_url` items.
+- Tool use uses OpenAI-compatible `tools` and `tool_calls`.
 
 ## Docs
 

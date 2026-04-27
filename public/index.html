@@ -18,7 +18,7 @@
         <div class="brand-block">
           <p class="eyebrow">HW02</p>
           <h1>My Own ChatGPT</h1>
-          <p class="subtitle">Pick a model, tune prompts, stream replies, and keep both local chat history and persistent memory.</p>
+          <p class="subtitle">Pick a model, tune prompts, stream replies through NVIDIA NIM, and keep both local chat history and persistent memory.</p>
         </div>
 
         <section class="panel-card session-panel">
@@ -42,18 +42,18 @@
 
             <label id="customModelField" class="field">
               <span>Custom Model</span>
-              <input id="customModelInput" type="text" placeholder="Example: gemini-2.5-flash" />
+              <input id="customModelInput" type="text" placeholder="Example: minimax/minimax-m2.7" />
             </label>
           </div>
 
           <label class="toggle-field">
             <input id="autoRouteToggle" type="checkbox" />
-            <span>🤖 Auto Route</span>
+            <span>Auto Route</span>
           </label>
 
           <label class="toggle-field">
             <input id="toolsToggle" type="checkbox" />
-            <span>🔧 Tools</span>
+            <span>Tools</span>
           </label>
 
           <label class="field">
@@ -99,7 +99,7 @@
           <div class="section-heading">
             <div>
               <p class="eyebrow">Persistent</p>
-              <h3>🧠 Memory</h3>
+              <h3>Memory</h3>
             </div>
             <span id="memoryCountBadge" class="mini-badge">0 entries</span>
           </div>
@@ -118,7 +118,7 @@
 
         <section class="panel-card status-card">
           <p id="statusText">Loading settings...</p>
-          <p class="status-hint">The API key is read only from the server `.env` file.</p>
+          <p class="status-hint">The NVIDIA NIM API key is read only from the server `.env` file.</p>
         </section>
       </aside>
 
@@ -149,10 +149,10 @@
 
             <div class="composer-input-shell">
               <button id="attachImageButton" type="button" class="secondary-button attach-button" aria-label="Attach image">
-                📎
+                Attach
               </button>
               <button id="voiceInputButton" type="button" class="secondary-button attach-button" aria-label="Voice input">
-                🎙️
+                Voice
               </button>
               <input id="imageInput" type="file" accept="image/*" hidden />
               <textarea
@@ -175,7 +175,7 @@
       <article class="message">
         <div class="message-meta">
           <span class="role-tag"></span>
-          <button class="message-edit-button" type="button" hidden>✏️ Edit</button>
+          <button class="message-edit-button" type="button" hidden>Edit</button>
         </div>
         <div class="message-body"></div>
       </article>

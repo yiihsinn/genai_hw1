@@ -1,13 +1,13 @@
 {
   "name": "hw01-your-own-chatgpt",
   "version": "1.0.0",
-  "description": "A simple ChatGPT-style web app with model selection, system prompt, streaming, and short-term memory.",
+  "description": "A zero-dependency ChatGPT-style web app powered by NVIDIA NIM and vanilla JavaScript.",
   "main": "server.js",
   "scripts": {
     "start": "node server.js"
   },
   "keywords": [
-    "gemini",
+    "nvidia-nim",
     "chat",
     "streaming",
     "node"

@@ -1,3 +1,8 @@
+import {
+  getMessageText,
+  getPrimaryImageUrl
+} from "./state.js";
+
 export function populateModelOptions(select, models, defaultModel, currentModel) {
   const options = [...models];
   if (!options.includes(defaultModel)) {
@@ -152,12 +157,12 @@ export function renderPendingImage(container, pendingImage, onRemove) {
 
   const meta = document.createElement("p");
   meta.className = "pending-image-meta";
-  meta.textContent = `${pendingImage.mimeType} • ${Math.round(pendingImage.base64Data.length / 1024)} KB base64`;
+  meta.textContent = `${pendingImage.mimeType} | ${Math.round(pendingImage.base64Data.length / 1024)} KB base64`;
 
   const removeButton = document.createElement("button");
   removeButton.className = "remove-image-button";
   removeButton.type = "button";
-  removeButton.textContent = "✕";
+  removeButton.textContent = "Remove";
   removeButton.addEventListener("click", onRemove);
 
   copy.append(title, meta);
@@ -200,7 +205,7 @@ function renderMessageBody(body, message, index, editingMessageIndex, onRegenera
     wrapper.className = "message-edit-area";
 
     const textarea = document.createElement("textarea");
-    textarea.value = message.content || "";
+    textarea.value = getMessageText(message);
     textarea.rows = 5;
 
     const buttonRow = document.createElement("div");
@@ -209,7 +214,7 @@ function renderMessageBody(body, message, index, editingMessageIndex, onRegenera
     const regenerateButton = document.createElement("button");
     regenerateButton.className = "primary-button";
     regenerateButton.type = "button";
-    regenerateButton.textContent = "✓ Regenerate";
+    regenerateButton.textContent = "Regenerate";
     regenerateButton.addEventListener("click", () => onRegenerate(index, textarea.value));
 
     const cancelButton = document.createElement("button");
@@ -224,18 +229,20 @@ function renderMessageBody(body, message, index, editingMessageIndex, onRegenera
     return;
   }
 
-  if (message.imagePreviewUrl) {
+  const imageUrl = getPrimaryImageUrl(message);
+  if (imageUrl) {
     const image = document.createElement("img");
     image.className = "message-image";
-    image.src = message.imagePreviewUrl;
+    image.src = imageUrl;
     image.alt = message.imageName || "Uploaded image";
     body.appendChild(image);
   }
 
-  if (message.content) {
+  const textContent = getMessageText(message);
+  if (textContent) {
     const text = document.createElement("div");
     text.className = "message-text";
-    text.textContent = message.content;
+    text.textContent = textContent;
     body.appendChild(text);
   }
 }

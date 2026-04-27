@@ -14,20 +14,22 @@ const MEMORY_FILE = path.join(__dirname, "memory.json");
 
 const memoryStore = createMemoryStore(MEMORY_FILE);
 const geminiService = createGeminiService({
-  apiKey: process.env.GEMINI_API_KEY,
-  apiBase: "https://generativelanguage.googleapis.com/v1beta",
+  apiKey: process.env.NIM_API_KEY || process.env.NVIDIA_API_KEY,
+  apiBase: "https://integrate.api.nvidia.com/v1",
   modelOptions: [
-    "gemini-2.5-flash",
-    "gemini-3-flash-preview",
-    "gemini-3.1-flash-lite-preview"
+    "minimax/minimax-m2.7",
+    "moonshotai/kimi-k2.5",
+    "meta/llama-3.3-70b-instruct",
+    "microsoft/phi-4-reasoning-plus",
+    "deepseek-ai/deepseek-r1-0528",
+    "thudm/glm-5-plus"
   ],
-  defaultChatModel: "gemini-2.5-flash",
-  visionModel: "gemini-3-flash-preview",
-  liteModel: "gemini-3.1-flash-lite-preview",
-  blockedModels: new Set([
-    "gemini-2.5-pro",
-    "gemini-3.1-pro-preview"
-  ]),
+  defaultChatModel: "minimax/minimax-m2.7",
+  visionModel: "meta/llama-3.3-70b-instruct",
+  liteModel: "microsoft/phi-4-reasoning-plus",
+  longContextModel: "moonshotai/kimi-k2.5",
+  translationModel: "microsoft/phi-4-reasoning-plus",
+  blockedModels: new Set(),
   summaryThreshold: 20,
   summaryBatchSize: 10,
   maxRequestBodySize: 16_000_000,
