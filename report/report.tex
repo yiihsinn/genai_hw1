@@ -1,0 +1,60 @@
+\documentclass[11pt,a4paper]{article}
+
+\usepackage[margin=1in]{geometry}
+\usepackage{graphicx}
+\usepackage{parskip}
+\usepackage[hidelinks]{hyperref}
+\usepackage{titlesec}
+\usepackage[T1]{fontenc}
+\usepackage{mathptmx} % Uses Times font for better bold contrast
+\usepackage{microtype} % Improves typography
+
+% Format sections to be compact and elegant
+\titleformat{\section}{\large\bfseries}{\thesection}{1em}{}
+\titlespacing*{\section}{0pt}{1.5ex plus 1ex minus .2ex}{0.5ex plus .2ex}
+
+\title{\vspace{-1.5cm}\textbf{My Own ChatGPT v2}\\ \vspace{0.5ex} \Large System Introduction Report\\[1ex] \large 112550051}
+\author{}
+\date{\vspace{-4ex}}
+
+\begin{document}
+
+\maketitle
+\thispagestyle{empty}
+
+\begin{center}
+    \textbf{GitHub Repository:} \url{https://github.com/yiihsinn/genai_hw1}
+\end{center}
+
+\vspace{-0.5cm}
+
+\section*{Overview}
+My Own ChatGPT v2 is a \textbf{zero-dependency web AI assistant} built with \textbf{vanilla JavaScript} on the frontend and \textbf{Node.js built-in modules} on the backend. The system supports streaming chat, multimodal image input, persistent memory, automatic model routing, tool calling, multi-session local history, export, regeneration, and voice input. The backend acts as an application server so provider access, memory handling, and request validation are \textbf{centralized} instead of being exposed directly in the browser.
+
+\section*{Frontend Design}
+The browser side is responsible for \textbf{interaction, short-term context, and rendering}. \texttt{app.js} coordinates prompt submission, image upload, editing, export, and session switching. \texttt{state.js} stores recent context and multiple chat branches in \texttt{localStorage}. \texttt{api.js} handles HTTP requests and SSE consumption so assistant replies can stream token by token. \texttt{memory-ui.js} and \texttt{tools-ui.js} render persistent memory cards and tool execution cards. This structure \textbf{separates UI logic from transport and local state management}.
+
+\section*{Backend Design}
+The backend uses a \textbf{native Node.js HTTP server}. \texttt{server.js} initializes the application and connects the router, memory store, SSE helpers, and model service. \texttt{router.js} exposes \texttt{/api/chat}, \texttt{/api/memory}, and \texttt{/api/health}. The main orchestration logic lives in \texttt{gemini.js}, which acts as an \textbf{NVIDIA NIM proxy}. It builds OpenAI-compatible chat payloads, validates image input, performs \textbf{model auto-routing}, runs \textbf{tool-calling loops}, and forwards \textbf{streamed responses} through SSE. \texttt{tools.js} implements weather, calculator, and web-search functions.
+
+\section*{Memory Mechanism}
+The system combines \textbf{short-term context} with \textbf{typed long-term memory}. Short-term memory is the recent chat history selected before each request. Long-term memory is stored in \texttt{memory.json} by \texttt{memory.js} and \textbf{survives across sessions}. To better match AI agent memory concepts, entries are typed as \textbf{episodic, semantic, or procedural}. When a conversation becomes long, the backend triggers a memory pipeline that performs \textbf{summarization, structured extraction, and reflection-style insight generation}. The results are written back to persistent storage and later retrieved as relevant context for future prompts.
+
+\section*{Multimodal, Routing, and Tools}
+The system supports \textbf{text-plus-image input} using OpenAI-style multimodal message content. When an image is attached, the backend automatically switches to a \textbf{vision-capable model}. Auto-routing also selects different models for long code-heavy prompts, lightweight requests, and translation or summarization tasks. When tools are enabled, the assistant can call backend-defined functions for \textbf{weather, calculation, and web search}. Tool calls and results are streamed back as separate SSE events so the user can observe intermediate system behavior.
+
+\section*{Summary}
+Overall, the system is designed to be \textbf{simple, inspectable, and practical}. The frontend manages interaction and recent context, while the backend \textbf{centralizes model access, memory processing, routing logic, and tool execution}. This modular design makes the project suitable for demonstration and future extension, especially for coursework focused on \textbf{AI agents, long-term memory, and multimodal applications}.
+
+\newpage
+\thispagestyle{empty}
+
+\begin{center}
+{\Large \textbf{System Architecture Diagram}}
+
+\vspace{0.75cm}
+
+\includegraphics[width=\textwidth,height=0.88\textheight,keepaspectratio]{image.png}
+\end{center}
+
+\end{document}
