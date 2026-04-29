@@ -4,7 +4,7 @@ export const CHAT_KEY_PREFIX = "chat_";
 export const SUMMARY_THRESHOLD = 20;
 
 export const defaultState = {
-  model: "minimax/minimax-m2.7",
+  model: "meta/llama-3.3-70b-instruct",
   customModel: "",
   autoRoute: false,
   toolsEnabled: false,

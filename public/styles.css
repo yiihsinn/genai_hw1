@@ -314,7 +314,7 @@ button:disabled {
 
 .memory-compose {
   display: grid;
-  grid-template-columns: minmax(0, 1fr) auto;
+  grid-template-columns: 132px minmax(0, 1fr) auto;
   gap: 10px;
 }
 
@@ -344,6 +344,45 @@ button:disabled {
   border: 1px solid var(--line);
   border-radius: 18px;
   background: rgba(255, 250, 244, 0.88);
+}
+
+.memory-card-header {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
+.memory-type-badge,
+.memory-origin-badge {
+  display: inline-flex;
+  align-items: center;
+  padding: 5px 10px;
+  border-radius: 999px;
+  font-size: 11px;
+  font-weight: 700;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+}
+
+.memory-type-badge.semantic {
+  background: rgba(90, 128, 188, 0.12);
+  color: #30508b;
+}
+
+.memory-type-badge.episodic {
+  background: rgba(188, 90, 47, 0.12);
+  color: var(--accent-deep);
+}
+
+.memory-type-badge.procedural {
+  background: rgba(88, 128, 109, 0.16);
+  color: #325b49;
+}
+
+.memory-origin-badge {
+  background: rgba(96, 62, 34, 0.08);
+  color: var(--muted);
 }
 
 .memory-summary {

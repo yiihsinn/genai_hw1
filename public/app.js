@@ -73,6 +73,7 @@ const elements = {
   stopButton: document.querySelector("#stopButton"),
   sendButton: document.querySelector("#sendButton"),
   messageTemplate: document.querySelector("#messageTemplate"),
+  memoryTypeSelect: document.querySelector("#memoryTypeSelect"),
   memoryInput: document.querySelector("#memoryInput"),
   addMemoryButton: document.querySelector("#addMemoryButton"),
   memoryList: document.querySelector("#memoryList"),
@@ -464,6 +465,7 @@ function downloadTextFile(filename, text, mimeType) {
 
 async function handleAddMemory() {
   const summary = elements.memoryInput.value.trim();
+  const type = elements.memoryTypeSelect.value || "semantic";
   if (!summary) {
     return;
   }
@@ -472,6 +474,8 @@ async function handleAddMemory() {
 
   try {
     await saveMemoryEntry({
+      type,
+      origin: "manual",
       summary,
       sourceMessageCount: 0
     });
@@ -618,7 +622,7 @@ async function requestAssistantReply(assistantMessage) {
   try {
     const response = await requestChatStream({
       model: selectedModel,
-      systemPrompt: buildSystemPrompt(state.systemPrompt, memoryEntries),
+      systemPrompt: buildSystemPrompt(state.systemPrompt, memoryEntries, state.messages),
       temperature: state.temperature,
       topP: state.topP,
       maxOutputTokens: state.maxOutputTokens,
@@ -731,7 +735,7 @@ function createUserMessage(prompt, image) {
 function handleMemorySummaryEvent(data) {
   trimSummarizedMessages(Number(data?.sourceMessageCount || 0));
   refreshMemoryEntries({ silent: true });
-  elements.statusText.textContent = "Older messages were summarized into persistent memory.";
+  elements.statusText.textContent = `Older messages were processed into long-term memory${data?.createdCount ? ` (${data.createdCount} entries)` : ""}.`;
 }
 
 function trimSummarizedMessages(chatMessageCount) {
@@ -773,7 +777,7 @@ function handleRoutingEvent(data) {
     return;
   }
 
-  showRuntimeNotice(elements.runtimeNotice, `→ Routed to ${data.model} (${data.reason || "automatic routing"})`);
+  showRuntimeNotice(elements.runtimeNotice, `Routed to ${data.model} (${data.reason || "automatic routing"})`);
 }
 
 function handleToolCallEvent(data) {
@@ -898,10 +902,11 @@ function persistState() {
   state = persistChatState(activeChatId, state);
 }
 
-function buildSystemPrompt(basePrompt, entries) {
+function buildSystemPrompt(basePrompt, entries, messages) {
   const blocks = [];
   const trimmedBasePrompt = typeof basePrompt === "string" ? basePrompt.trim() : "";
-  const persistentMemoryBlock = buildPersistentMemoryBlock(entries);
+  const relevantEntries = selectRelevantMemoryEntries(entries, messages);
+  const persistentMemoryBlock = buildPersistentMemoryBlock(relevantEntries);
 
   if (trimmedBasePrompt) {
     blocks.push(trimmedBasePrompt);
@@ -915,26 +920,160 @@ function buildSystemPrompt(basePrompt, entries) {
 }
 
 function buildPersistentMemoryBlock(entries) {
-  const lines = [];
+  const sections = [];
+  const semanticEntries = entries.filter((entry) => entry.type === "semantic");
+  const proceduralEntries = entries.filter((entry) => entry.type === "procedural");
+  const episodicEntries = entries.filter((entry) => entry.type === "episodic");
 
-  entries.forEach((entry) => {
-    const summaryLines = String(entry.summary || "")
-      .split(/\r?\n/)
-      .map((line) => line.trim())
-      .filter(Boolean);
+  if (semanticEntries.length > 0) {
+    sections.push(buildMemorySection("Semantic Memory", semanticEntries));
+  }
 
-    summaryLines.forEach((line) => {
-      if (line.startsWith("-")) {
-        lines.push(line);
-      } else if (line.startsWith("*")) {
-        lines.push(`-${line.slice(1)}`);
-      } else {
-        lines.push(`- ${line}`);
+  if (proceduralEntries.length > 0) {
+    sections.push(buildMemorySection("Procedural Memory", proceduralEntries));
+  }
+
+  if (episodicEntries.length > 0) {
+    sections.push(buildMemorySection("Relevant Episodes", episodicEntries));
+  }
+
+  return sections.filter(Boolean).join("\n\n");
+}
+
+function selectRelevantMemoryEntries(entries, messages) {
+  if (!Array.isArray(entries) || entries.length === 0) {
+    return [];
+  }
+
+  const queryText = collectMemoryQuery(messages);
+  const queryTokens = tokenizeMemoryText(queryText);
+  const ranked = entries
+    .map((entry, index) => ({
+      entry,
+      score: scoreMemoryEntry(entry, queryText, queryTokens, index)
+    }))
+    .sort((left, right) => {
+      if (right.score !== left.score) {
+        return right.score - left.score;
       }
+
+      return Date.parse(right.entry.updatedAt || 0) - Date.parse(left.entry.updatedAt || 0);
     });
+
+  const limits = {
+    semantic: 4,
+    procedural: 3,
+    episodic: 2
+  };
+  const counts = {
+    semantic: 0,
+    procedural: 0,
+    episodic: 0
+  };
+  const selected = [];
+
+  ranked.forEach(({ entry, score }) => {
+    const type = entry.type || "semantic";
+    if (selected.length >= 8) {
+      return;
+    }
+
+    if ((limits[type] || 2) <= (counts[type] || 0)) {
+      return;
+    }
+
+    if (queryTokens.length > 0 && score <= 0) {
+      return;
+    }
+
+    counts[type] = (counts[type] || 0) + 1;
+    selected.push(entry);
   });
 
-  return lines.join("\n");
+  return selected.length > 0
+    ? selected
+    : ranked
+      .slice(0, 4)
+      .map(({ entry }) => entry);
+}
+
+function collectMemoryQuery(messages) {
+  if (!Array.isArray(messages)) {
+    return "";
+  }
+
+  return messages
+    .filter((message) => message?.role === "user")
+    .slice(-2)
+    .map((message) => getMessageText(message))
+    .filter(Boolean)
+    .join("\n");
+}
+
+function scoreMemoryEntry(entry, queryText, queryTokens, index) {
+  const type = entry?.type || "semantic";
+  const baseScore = type === "semantic"
+    ? 40
+    : type === "procedural"
+      ? 32
+      : 18;
+  const originBonus = entry?.origin === "reflected"
+    ? 8
+    : entry?.origin === "manual"
+      ? 6
+      : 0;
+  const freshnessBonus = Math.max(0, 10 - index);
+
+  if (queryTokens.length === 0) {
+    return baseScore + originBonus + freshnessBonus;
+  }
+
+  const summaryText = String(entry?.summary || "").toLowerCase();
+  const overlap = queryTokens.filter((token) => summaryText.includes(token)).length;
+  const directBonus = queryText && summaryText.includes(queryText.toLowerCase()) ? 6 : 0;
+
+  return baseScore + originBonus + freshnessBonus + (overlap * 10) + directBonus;
+}
+
+function tokenizeMemoryText(text) {
+  if (typeof text !== "string" || !text.trim()) {
+    return [];
+  }
+
+  return Array.from(new Set(
+    (text.toLowerCase().match(/[\p{L}\p{N}_-]+/gu) || [])
+      .filter((token) => token.length > 1)
+  ));
+}
+
+function buildMemorySection(title, entries) {
+  const lines = entries
+    .flatMap((entry) => normalizeMemoryLines(entry.summary))
+    .slice(0, 8);
+
+  if (lines.length === 0) {
+    return "";
+  }
+
+  return `[${title}]\n${lines.join("\n")}`;
+}
+
+function normalizeMemoryLines(summary) {
+  return String(summary || "")
+    .split(/\r?\n/)
+    .map((line) => line.trim())
+    .filter(Boolean)
+    .map((line) => {
+      if (line.startsWith("-")) {
+        return line;
+      }
+
+      if (line.startsWith("*")) {
+        return `-${line.slice(1)}`;
+      }
+
+      return `- ${line}`;
+    });
 }
 
 function readFileAsDataUrl(file) {

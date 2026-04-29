@@ -42,7 +42,7 @@
 
             <label id="customModelField" class="field">
               <span>Custom Model</span>
-              <input id="customModelInput" type="text" placeholder="Example: minimax/minimax-m2.7" />
+              <input id="customModelInput" type="text" placeholder="Example: meta/llama-3.3-70b-instruct" />
             </label>
           </div>
 
@@ -84,7 +84,7 @@
             </label>
 
             <label class="field">
-              <span>Memory Turns</span>
+              <span>Context Turns</span>
               <input id="memoryTurnsInput" type="number" min="1" max="20" step="1" />
             </label>
           </div>
@@ -105,10 +105,15 @@
           </div>
 
           <div class="memory-compose">
+            <select id="memoryTypeSelect" aria-label="Memory type">
+              <option value="semantic">Semantic</option>
+              <option value="episodic">Episodic</option>
+              <option value="procedural">Procedural</option>
+            </select>
             <input
               id="memoryInput"
               type="text"
-              placeholder="Add a long-term fact or preference."
+              placeholder="Add a long-term fact, event, or workflow."
             />
             <button id="addMemoryButton" class="secondary-button" type="button">Add</button>
           </div>
@@ -136,13 +141,13 @@
                 <button id="exportMarkdownButton" class="secondary-button" type="button">Export as Markdown</button>
               </div>
             </div>
-            <div class="header-badge" id="memoryBadge">Memory 0 turns</div>
+            <div class="header-badge" id="memoryBadge">Context 0 turns</div>
           </div>
         </header>
 
-        <div id="runtimeNotice" class="runtime-notice" hidden></div>
         <section id="messageList" class="message-list"></section>
 
+        <div id="runtimeNotice" class="runtime-notice" hidden></div>
         <form id="composerForm" class="composer">
           <div class="composer-main">
             <div id="pendingImageContainer" class="pending-image-container" hidden></div>

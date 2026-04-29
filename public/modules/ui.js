@@ -25,7 +25,7 @@ export function populateModelOptions(select, models, defaultModel, currentModel)
 
 export function updateMemoryBadge(element, messages, isChatMessage) {
   const turnCount = Math.ceil(messages.filter(isChatMessage).length / 2);
-  element.textContent = `Memory ${turnCount} turns`;
+  element.textContent = `Context ${turnCount} turns`;
 }
 
 export function renderSessionList(container, sessions, activeChatId, onSelect, onDelete) {
